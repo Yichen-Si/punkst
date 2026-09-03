@@ -6,9 +6,11 @@ multiresolution artifacts during development:
 - `build_multires_level0_html.py` displays the global diffusion embedding,
   factor highlights, external labels, and an optional supplied UMAP.
 - `build_multires_scene_html.py` displays the hierarchy atlas and per-scene
-  diffusion, supervised, and quartimax-rotated PCA views. Its global diffusion
-  plot can be colored by the selected partition or by the external labels; the
-  external-label colors and legend are shared with the supplied UMAP.
+  diffusion, supervised, and quartimax-rotated PCA views. Each scene embedding
+  has a grouped plot at left and a factor-abundance plot at right, controlled
+  by one shared factor picker. Its global diffusion plot can be colored by the
+  selected partition or by the external labels; the external-label colors and
+  legend are shared with the supplied UMAP.
 - `multires_report_common.py` contains their shared artifact and TSV readers.
 
 These viewers are diagnostic tools, not production output interfaces. Their
