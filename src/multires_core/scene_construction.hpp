@@ -47,6 +47,8 @@ struct SceneClassifierResult {
     bool plugin_model_available = false;
     punkst::partition_classifier::Model plugin_model;
     std::vector<int32_t> model_class_to_scene;
+    int32_t fine_rows = 0;
+    int32_t scene_columns = 0;
     // Fine-point rows by canonical scene columns. Ineligible scene columns are
     // zero. Candidate restriction and normalization are component-local.
     RowMajorMatrixXd fine_probabilities;
@@ -117,7 +119,8 @@ FineSceneLevel construct_fine_scene_level(
     const RawClusteringGraph& fine_raw_graph,
     SceneCoreMode requested_mode = SceneCoreMode::Inherit,
     const SceneClassifierResult* classifier = nullptr,
-    const SceneConstructionOptions& options = SceneConstructionOptions());
+    const SceneConstructionOptions& options = SceneConstructionOptions(),
+    const RowMajorMatrixXd* fine_compositions = nullptr);
 
 struct SceneDagNode {
     int32_t id = -1;
@@ -147,6 +150,9 @@ struct SceneDagEdge {
     double child_fraction = 0.0;
     bool major = false;
     bool portal = false;
+    // True when a deeper-level scene has no retained core overlap with the
+    // immediately preceding level and is attached directly to the root.
+    bool root_fallback = false;
 };
 
 struct SceneDag {

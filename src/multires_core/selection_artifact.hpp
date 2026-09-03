@@ -37,6 +37,7 @@ struct SelectionArtifactResult {
     std::vector<std::vector<int32_t>> full_memberships;
     std::string graph_fingerprint;
     std::optional<std::string> diffusion_fingerprint;
+    std::optional<std::string> diffusion_selection_identity_fingerprint;
 };
 
 SelectionArtifactResult run_multires_selection(

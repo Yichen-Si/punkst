@@ -26,6 +26,30 @@ class ArtifactError(ValueError):
     """Raised when an artifact is malformed or cannot be published safely."""
 
 
+def manifest_path(path: Path | str) -> Path:
+    value = Path(path).resolve()
+    return value / "manifest.json" if value.is_dir() else value
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_verified_manifest(path: Path | str, artifact_type: str) \
+        -> tuple[Path, dict[str, Any]]:
+    resolved = manifest_path(path)
+    manifest = read_manifest(resolved)
+    if (manifest.get("artifact_type") != artifact_type
+            or manifest.get("schema_version") != SCHEMA_VERSION):
+        raise ArtifactError(f"Expected schema-v1 artifact {artifact_type}")
+    verify_artifact_fingerprint(manifest, resolved.parent)
+    return resolved, manifest
+
+
 def canonical_json(value: Any) -> bytes:
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), allow_nan=False,
@@ -44,11 +68,22 @@ def read_manifest(path: Path) -> dict[str, Any]:
 
 
 def write_manifest(path: Path, value: dict[str, Any]) -> None:
-    with path.open("wb") as stream:
-        stream.write(canonical_json(value))
-        stream.write(b"\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.tmp-", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(canonical_json(value))
+            stream.write(b"\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, path.stat().st_mode & 0o777
+                 if path.exists() else 0o644)
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _safe_relative_path(root: Path, value: Any) -> Path:

@@ -25,25 +25,31 @@ void write_diagnostics(const fs::path& root,
     {
         std::ofstream output(root / "diagnostics/scout.tsv");
         output << std::setprecision(17)
-            << "scout\tresolution\tc90\tcommunities\tquality\titerations"
+            << "scout\tresolution\tc90\tcommunities\tretained_scenes"
+               "\tquality\titerations"
                "\tconverged\n";
         for (size_t index = 0; index < result.scout_evaluations.size(); ++index) {
             const auto& value = result.scout_evaluations[index];
             output << index << '\t' << value.resolution << '\t' << value.c90
-                << '\t' << value.n_communities << '\t' << value.quality
+                << '\t' << value.n_communities << '\t'
+                << value.retained_scenes << '\t' << value.quality
                 << '\t' << value.iterations << '\t' << value.converged << '\n';
         }
     }
     {
         std::ofstream output(root / "diagnostics/evaluations.tsv");
         output << std::setprecision(17)
-            << "evaluation\tresolution\tc90\tcommunities\tmean_seed_ari"
+            << "evaluation\tresolution\tc90\tcommunities\tmean_communities"
+               "\tretained_scenes"
+               "\tmean_seed_ari"
                "\tminimum_seed_ari\tpersistence_from_previous"
                "\tmedoid_restart\n";
         for (size_t index = 0; index < result.evaluations.size(); ++index) {
             const auto& value = result.evaluations[index];
             output << index << '\t' << value.resolution << '\t' << value.c90
                 << '\t' << value.n_communities << '\t'
+                << value.mean_n_communities << '\t'
+                << value.retained_scenes << '\t'
                 << value.mean_pairwise_ari << '\t'
                 << value.minimum_pairwise_ari << '\t';
             if (std::isfinite(value.persistence_from_previous)) {
@@ -97,7 +103,7 @@ void write_diagnostics(const fs::path& root,
             << "plateau\tfirst_evaluation\tlast_evaluation"
                "\trepresentative_evaluation\tfirst_resolution"
                "\tlast_resolution\trepresentative_resolution\tc90"
-               "\tcommunities\tminimum_seed_stability"
+               "\tcommunities\tretained_scenes\tminimum_seed_stability"
                "\tminimum_adjacent_persistence\n";
         for (size_t index = 0; index < result.plateaus.size(); ++index) {
             const auto& value = result.plateaus[index];
@@ -107,6 +113,7 @@ void write_diagnostics(const fs::path& root,
                 << value.first_resolution << '\t' << value.last_resolution
                 << '\t' << value.representative_resolution << '\t'
                 << value.c90 << '\t' << value.n_communities << '\t'
+                << value.retained_scenes << '\t'
                 << value.minimum_seed_stability << '\t'
                 << value.minimum_adjacent_persistence << '\n';
         }
@@ -114,12 +121,14 @@ void write_diagnostics(const fs::path& root,
     {
         std::ofstream output(root / "selected_levels.tsv");
         output << std::setprecision(17)
-            << "level\tresolution\tc90\tcommunities\tevaluation\tplateau"
+            << "level\tresolution\tc90\tcommunities\tretained_scenes"
+               "\tevaluation\tplateau"
                "\tstable_plateau\tfallback\tfallback_ceiling_relaxed"
                "\tmean_seed_ari\tminimum_seed_ari\n";
         for (const auto& value : result.levels) {
             output << value.level << '\t' << value.resolution << '\t'
                 << value.c90 << '\t' << value.n_communities << '\t'
+                << value.retained_scenes << '\t'
                 << value.evaluation << '\t' << value.plateau << '\t'
                 << value.stable_plateau << '\t' << value.fallback << '\t'
                 << value.fallback_ceiling_relaxed << '\t'
@@ -134,6 +143,9 @@ json selection_options_json(const SelectionArtifactOptions& options) {
     return {
         {"level1_c90_minimum", value.level1_c90_minimum},
         {"level1_c90_maximum", value.level1_c90_maximum},
+        {"level1_scene_count_minimum", value.level1_scene_count_minimum},
+        {"level1_scene_count_maximum", value.level1_scene_count_maximum},
+        {"minimum_scene_core_members", value.minimum_scene_core_members},
         {"min_level", value.minimum_levels},
         {"max_level", value.maximum_levels},
         {"next_level_c90_multiplier", value.next_level_c90_multiplier},
@@ -143,6 +155,7 @@ json selection_options_json(const SelectionArtifactOptions& options) {
         {"maximum_midpoints", value.maximum_midpoints},
         {"final_restarts", value.final_restarts},
         {"stop_c90", value.stop_c90},
+        {"maximum_scan_communities", value.maximum_scan_communities},
         {"maximum_scan_steps", value.maximum_scan_steps},
         {"initial_resolution", value.initial_resolution},
         {"scout_resolution_factor", value.scout_resolution_factor},
@@ -242,6 +255,10 @@ SelectionArtifactResult run_multires_selection(
             *options.diffusion_manifest);
         out.diffusion_fingerprint =
             diffusion.at("fingerprint").get<std::string>();
+        if (diffusion.contains("selection_identity_fingerprint")) {
+            out.diffusion_selection_identity_fingerprint = diffusion.at(
+                "selection_identity_fingerprint").get<std::string>();
+        }
         if (diffusion.at("source").at("graph_fingerprint")
                 .get<std::string>() != out.graph_fingerprint) {
             throw std::runtime_error(
@@ -313,6 +330,21 @@ SelectionArtifactResult run_multires_selection(
                     options.refinement_seed + level.level - 1);
             }
         }
+        if (level.level == 1
+                && options.selection.level1_scene_count_minimum > 0) {
+            std::vector<int64_t> unit_counts(full.size(), 1);
+            const int32_t retained = count_retained_scenes(
+                full, unit_counts,
+                options.selection.minimum_scene_core_members);
+            if (retained < options.selection.level1_scene_count_minimum
+                    || retained
+                        > options.selection.level1_scene_count_maximum) {
+                throw std::runtime_error(
+                    "The finalized Level-1 partition has "
+                    + std::to_string(retained)
+                    + " retained scenes, outside the requested range");
+            }
+        }
         out.full_memberships.push_back(std::move(full));
     }
     return out;
@@ -363,13 +395,18 @@ void write_selection_artifact(const fs::path& output,
             const int32_t full_communities = 1 + *std::max_element(
                 result.full_memberships[index].begin(),
                 result.full_memberships[index].end());
+            const int32_t full_retained_scenes = count_retained_scenes(
+                result.full_memberships[index], unit_counts,
+                options.selection.minimum_scene_core_members);
             levels.push_back({
                 {"level", selected.level},
                 {"resolution", selected.resolution},
                 {"selection_c90", selected.c90},
                 {"scan_communities", selected.n_communities},
+                {"selection_retained_scenes", selected.retained_scenes},
                 {"full_c90", full_c90},
                 {"full_communities", full_communities},
+                {"full_retained_scenes", full_retained_scenes},
                 {"evaluation", selected.evaluation},
                 {"plateau", selected.plateau < 0
                     ? json(nullptr) : json(selected.plateau)},
@@ -397,6 +434,8 @@ void write_selection_artifact(const fs::path& output,
                 {"resolution", value.resolution},
                 {"c90", value.c90},
                 {"communities", value.n_communities},
+                {"mean_communities", value.mean_n_communities},
+                {"retained_scenes", value.retained_scenes},
                 {"mean_seed_ari", value.mean_pairwise_ari},
                 {"minimum_seed_ari", value.minimum_pairwise_ari},
                 {"persistence_from_previous",
@@ -424,7 +463,11 @@ void write_selection_artifact(const fs::path& output,
                     : json(nullptr)},
                 {"diffusion_fingerprint",
                     result.diffusion_fingerprint.has_value()
-                        ? json(*result.diffusion_fingerprint) : json(nullptr)}
+                        ? json(*result.diffusion_fingerprint) : json(nullptr)},
+                {"diffusion_selection_identity_fingerprint",
+                    result.diffusion_selection_identity_fingerprint.has_value()
+                        ? json(*result.diffusion_selection_identity_fingerprint)
+                        : json(nullptr)}
             }},
             {"requested_scan_population",
                 scan_population_name(options.scan_population)},

@@ -15,24 +15,6 @@ namespace {
 using punkst::multires::json;
 namespace fs = std::filesystem;
 
-const json& object_field(const json& parent, const char* name) {
-    const auto found = parent.find(name);
-    if (found == parent.end() || !found->is_object()) {
-        throw std::invalid_argument(std::string(name) + " must be a JSON object");
-    }
-    return *found;
-}
-
-void reject_unknown(const json& value,
-        const std::set<std::string>& known, const std::string& context) {
-    for (const auto& item : value.items()) {
-        if (!known.count(item.key())) {
-            throw std::invalid_argument(
-                "Unknown " + context + " key: " + item.key());
-        }
-    }
-}
-
 int32_t optional_column(const json& input, const char* name) {
     const auto found = input.find(name);
     if (found == input.end() || found->is_null()) return -1;
@@ -107,7 +89,7 @@ json resolved_knn_options(const HellingerKnnGraphOptions& graph) {
 
 ParsedMetricGraphRequest parse_metric_graph_request(
         const fs::path& request_path, const json& request) {
-    reject_unknown(request, {"artifact_type", "schema_version", "input",
+    punkst::multires::reject_unknown_keys(request, {"artifact_type", "schema_version", "input",
         "graph", "coarsening", "diffusion_sidecar", "runtime"}, "request");
     if (request.value("artifact_type", "") != "punkst.knn_graph.request"
             || request.value("schema_version", 0) != 1) {
@@ -117,8 +99,8 @@ ParsedMetricGraphRequest parse_metric_graph_request(
 
     ParsedMetricGraphRequest out;
     out.resolved = request;
-    const json& input = object_field(request, "input");
-    reject_unknown(input, {"theta_path", "identifier_column",
+    const json& input = punkst::multires::require_object_field(request, "input");
+    punkst::multires::reject_unknown_keys(input, {"theta_path", "identifier_column",
         "factor_column_start", "factor_column_end",
         "factor_weight_threshold"}, "input");
     if (!input.contains("theta_path")) {
@@ -139,8 +121,8 @@ ParsedMetricGraphRequest parse_metric_graph_request(
 
     int32_t threads = 1;
     if (request.contains("runtime")) {
-        const json& runtime = object_field(request, "runtime");
-        reject_unknown(runtime, {"threads"}, "runtime");
+        const json& runtime = punkst::multires::require_object_field(request, "runtime");
+        punkst::multires::reject_unknown_keys(runtime, {"threads"}, "runtime");
         threads = runtime.value("threads", 1);
     }
     if (threads <= 0) {
@@ -148,8 +130,8 @@ ParsedMetricGraphRequest parse_metric_graph_request(
     }
 
     if (request.contains("graph")) {
-        const json& graph = object_field(request, "graph");
-        reject_unknown(graph, {"neighbors", "knn_backend", "knn_epsilon",
+        const json& graph = punkst::multires::require_object_field(request, "graph");
+        punkst::multires::reject_unknown_keys(graph, {"neighbors", "knn_backend", "knn_epsilon",
             "flat_kernel", "hnsw_m", "hnsw_ef_construction",
             "hnsw_ef_search", "hnsw_max_ef_search", "hnsw_candidates",
             "hnsw_audit_queries", "hnsw_recall", "hnsw_force",
@@ -167,8 +149,8 @@ ParsedMetricGraphRequest parse_metric_graph_request(
     out.options.graph.knn.n_threads = threads;
 
     if (request.contains("coarsening")) {
-        const json& coarsening = object_field(request, "coarsening");
-        reject_unknown(coarsening, {"enabled", "target_nodes",
+        const json& coarsening = punkst::multires::require_object_field(request, "coarsening");
+        punkst::multires::reject_unknown_keys(coarsening, {"enabled", "target_nodes",
             "activation_threshold", "target_minimum", "target_maximum",
             "target_divisor", "maximum_microcluster_size"}, "coarsening");
         out.options.coarsening_enabled = coarsening.value("enabled", false);

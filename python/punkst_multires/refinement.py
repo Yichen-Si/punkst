@@ -23,6 +23,7 @@ from .artifacts import (
     load_array,
     publish_directory,
     read_manifest,
+    verify_artifact_fingerprint,
     write_array,
     write_manifest,
 )
@@ -763,6 +764,8 @@ def write_refinement_result(output: Path | str,
                 "resolved_backend": "scipy-lobpcg",
             },
         }
+        manifest["fingerprint"] = artifact_fingerprint(
+            manifest, root, list(arrays.values()))
         write_manifest(root / "manifest.json", manifest)
         load_refinement_result(root / "manifest.json", request.fingerprint)
 
@@ -781,6 +784,7 @@ def load_refinement_result(
     if manifest.get("schema_version") != SCHEMA_VERSION:
         raise ArtifactError(
             f"Unsupported refinement schema version: {manifest.get('schema_version')}")
+    verify_artifact_fingerprint(manifest, root)
     fingerprint = manifest.get("input_fingerprint")
     if not isinstance(fingerprint, str) or len(fingerprint) != 64:
         raise ArtifactError("Result input_fingerprint is missing or malformed")

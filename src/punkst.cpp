@@ -16,6 +16,7 @@ int32_t cmdPartitionClassifierPredict(int argc, char** argv);
 int32_t cmdKnnGraph(int argc, char** argv);
 int32_t cmdMultiresSelection(int argc, char** argv);
 int32_t cmdMultiresScenes(int argc, char** argv);
+int32_t cmdMultiresSceneProjections(int argc, char** argv);
 int32_t cmdHDPSVI(int argc, char** argv);
 int32_t cmdLDATransform(int argc, char** argv);
 int32_t cmdLDAFactorEval(int argc, char** argv);
@@ -72,6 +73,7 @@ int32_t main(int32_t argc, char** argv) {
         .add_command("knn-graph", "Build a reusable Hellinger kNN graph artifact", cmdKnnGraph)
         .add_command("multires-selection", "Select stable Leiden resolutions on a graph artifact", cmdMultiresSelection)
         .add_command("multires-scenes", "Construct scene cores, halos, and the scene graph", cmdMultiresScenes)
+        .add_command("multires-scene-projections", "Build supervised and quartimax-rotated PCA views for every scene", cmdMultiresSceneProjections)
         .add_command("fit-hdp", "Train HDP model", cmdHDPSVI)
         .add_command("lda-transform", "Transform data using fitted LDA model", cmdLDATransform)
         .add_command("lda-factor-eval", "Evaluate leave-one-out LDA factor contribution", cmdLDAFactorEval)

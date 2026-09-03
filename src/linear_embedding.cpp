@@ -86,79 +86,6 @@ struct ProjectionInput {
     std::optional<punkst::projection::VisualizationSampleMoments> sample_moments;
 };
 
-struct FactorMassSelection {
-    punkst::linear_embedding::TopicCenterTable table;
-    double retained_mass_proportion = 0.0;
-};
-
-FactorMassSelection select_projection_factors(
-        const punkst::linear_embedding::TopicCenterTable& theta,
-        const std::vector<int32_t>& matched_rows,
-        double min_cover_mass, double min_mass) {
-    const Eigen::Index factors = theta.values.cols();
-    Eigen::VectorXd masses = Eigen::VectorXd::Zero(factors);
-    for (const int32_t row : matched_rows) {
-        masses += theta.values.row(row).transpose();
-    }
-    const double total_mass = masses.sum();
-    if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
-        throw punkst::linear_embedding::ProjectionFactorFilterError(
-            "Projection factor filter requires positive matched factor mass");
-    }
-
-    std::vector<Eigen::Index> mass_order(static_cast<size_t>(factors));
-    std::iota(mass_order.begin(), mass_order.end(), Eigen::Index{0});
-    std::stable_sort(mass_order.begin(), mass_order.end(),
-        [&](Eigen::Index left, Eigen::Index right) {
-            return masses(left) > masses(right);
-        });
-    std::vector<bool> covered(static_cast<size_t>(factors),
-        min_cover_mass >= 1.0);
-    if (min_cover_mass < 1.0) {
-        double cumulative_mass = 0.0;
-        for (const Eigen::Index factor : mass_order) {
-            covered[static_cast<size_t>(factor)] = true;
-            cumulative_mass += masses(factor);
-            if (cumulative_mass / total_mass > min_cover_mass) break;
-        }
-    }
-
-    std::vector<Eigen::Index> retained;
-    retained.reserve(static_cast<size_t>(factors));
-    double retained_mass = 0.0;
-    for (Eigen::Index factor = 0; factor < factors; ++factor) {
-        const double proportion = masses(factor) / total_mass;
-        if (covered[static_cast<size_t>(factor)]
-                && (min_mass <= 0.0 || proportion >= min_mass)) {
-            retained.push_back(factor);
-            retained_mass += masses(factor);
-        }
-    }
-    if (retained.size() < 3) {
-        throw punkst::linear_embedding::ProjectionFactorFilterError(
-            "Projection factor filter retained "
-            + std::to_string(retained.size()) + " of "
-            + std::to_string(factors)
-            + " factors; at least three are required"
-            + " (--min-cover-mass " + std::to_string(min_cover_mass)
-            + ", --min-mass " + std::to_string(min_mass) + ")");
-    }
-
-    FactorMassSelection selection;
-    selection.table.identifiers = theta.identifiers;
-    selection.table.topics.reserve(retained.size());
-    selection.table.values.resize(theta.values.rows(), retained.size());
-    for (size_t target = 0; target < retained.size(); ++target) {
-        const Eigen::Index source = retained[target];
-        selection.table.topics.push_back(
-            theta.topics[static_cast<size_t>(source)]);
-        selection.table.values.col(static_cast<Eigen::Index>(target)) =
-            theta.values.col(source);
-    }
-    selection.retained_mass_proportion = retained_mass / total_mass;
-    return selection;
-}
-
 struct DiscriminantRows {
     std::vector<int32_t> training;
     std::vector<int32_t> validation;
@@ -926,6 +853,119 @@ punkst::linear_embedding::prepare_projection(
     return out;
 }
 
+punkst::linear_embedding::ProjectionFactorSelection
+punkst::linear_embedding::select_projection_factors(
+        const Eigen::Ref<const RowMajorMatrixXd>& values,
+        const std::vector<int32_t>& matched_rows,
+        double min_cover_mass, double min_mass,
+        int32_t minimum_factors, bool restore_minimum) {
+    if (values.rows() <= 0 || values.cols() <= 0 || matched_rows.empty()
+            || minimum_factors <= 0 || minimum_factors > values.cols()
+            || !(min_cover_mass > 0.0) || min_cover_mass > 1.0
+            || !std::isfinite(min_cover_mass)
+            || min_mass < 0.0 || !std::isfinite(min_mass)) {
+        throw std::invalid_argument("Invalid projection factor selection");
+    }
+    const Eigen::Index factors = values.cols();
+    Eigen::VectorXd masses = Eigen::VectorXd::Zero(factors);
+    for (const int32_t row : matched_rows) {
+        if (row < 0 || row >= values.rows()) {
+            throw std::invalid_argument(
+                "Projection factor row is outside its range");
+        }
+        masses += values.row(row).transpose();
+    }
+    const double total_mass = masses.sum();
+    if (!(total_mass > 0.0) || !std::isfinite(total_mass)) {
+        throw ProjectionFactorFilterError(
+            "Projection factor filter requires positive matched factor mass");
+    }
+
+    std::vector<int32_t> mass_order(static_cast<size_t>(factors));
+    std::iota(mass_order.begin(), mass_order.end(), int32_t{0});
+    std::stable_sort(mass_order.begin(), mass_order.end(),
+        [&](int32_t left, int32_t right) {
+            return masses(left) > masses(right);
+        });
+    std::vector<bool> covered(static_cast<size_t>(factors),
+        min_cover_mass >= 1.0);
+    if (min_cover_mass < 1.0) {
+        double cumulative_mass = 0.0;
+        for (const int32_t factor : mass_order) {
+            covered[static_cast<size_t>(factor)] = true;
+            cumulative_mass += masses(factor);
+            if (cumulative_mass / total_mass > min_cover_mass) break;
+        }
+    }
+
+    ProjectionFactorSelection selection;
+    for (int32_t factor = 0; factor < factors; ++factor) {
+        const double proportion = masses(factor) / total_mass;
+        if (covered[static_cast<size_t>(factor)]
+                && (min_mass <= 0.0 || proportion >= min_mass)) {
+            selection.retained_indices.push_back(factor);
+        }
+    }
+    if (static_cast<int32_t>(selection.retained_indices.size())
+            < minimum_factors && restore_minimum) {
+        selection.retained_indices.assign(
+            mass_order.begin(), mass_order.begin() + minimum_factors);
+        std::sort(selection.retained_indices.begin(),
+            selection.retained_indices.end());
+        selection.minimum_restored = true;
+    }
+    if (static_cast<int32_t>(selection.retained_indices.size())
+            < minimum_factors) {
+        throw ProjectionFactorFilterError(
+            "Projection factor filter retained "
+            + std::to_string(selection.retained_indices.size()) + " of "
+            + std::to_string(factors) + " factors; at least "
+            + (minimum_factors == 3
+                ? std::string("three") : std::to_string(minimum_factors))
+            + " are required"
+            + " (--min-cover-mass " + std::to_string(min_cover_mass)
+            + ", --min-mass " + std::to_string(min_mass) + ")");
+    }
+    double retained_mass = 0.0;
+    for (const int32_t factor : selection.retained_indices) {
+        retained_mass += masses(factor);
+    }
+    selection.retained_mass_proportion = retained_mass / total_mass;
+    return selection;
+}
+
+punkst::linear_embedding::TopicCenterTable
+punkst::linear_embedding::retain_projection_factors(
+        const TopicCenterTable& theta,
+        const ProjectionFactorSelection& selection) {
+    if (theta.values.rows() != static_cast<Eigen::Index>(
+            theta.identifiers.size())
+            || theta.values.cols() != static_cast<Eigen::Index>(
+                theta.topics.size())
+            || selection.retained_indices.empty()) {
+        throw std::invalid_argument("Invalid retained projection factors");
+    }
+    TopicCenterTable output;
+    output.identifiers = theta.identifiers;
+    output.topics.reserve(selection.retained_indices.size());
+    output.values.resize(theta.values.rows(),
+        static_cast<Eigen::Index>(selection.retained_indices.size()));
+    int32_t previous = -1;
+    for (size_t target = 0;
+            target < selection.retained_indices.size(); ++target) {
+        const int32_t source = selection.retained_indices[target];
+        if (source <= previous || source < 0 || source >= theta.values.cols()) {
+            throw std::invalid_argument(
+                "Retained projection factors must be sorted and unique");
+        }
+        previous = source;
+        output.topics.push_back(theta.topics[static_cast<size_t>(source)]);
+        output.values.col(static_cast<Eigen::Index>(target)) =
+            theta.values.col(source);
+    }
+    return output;
+}
+
 Eigen::MatrixXd punkst::linear_embedding::aggregate_cluster_factors(
         const Eigen::Ref<const RowMajorMatrixXd>& values,
         const Eigen::Ref<const Eigen::VectorXi>& assignments,
@@ -1098,10 +1138,11 @@ void punkst::linear_embedding::run_partition(
                 "Invalid linear embedding assignment or row mapping");
         }
     }
-    const FactorMassSelection factor_selection = select_projection_factors(
-        theta, matched_theta_rows, pipeline.min_cover_mass,
-        pipeline.min_mass);
-    const TopicCenterTable& projection_theta = factor_selection.table;
+    const ProjectionFactorSelection factor_selection =
+        select_projection_factors(theta.values, matched_theta_rows,
+            pipeline.min_cover_mass, pipeline.min_mass);
+    const TopicCenterTable projection_theta = retain_projection_factors(
+        theta, factor_selection);
     const int32_t topics = static_cast<int32_t>(
         projection_theta.values.cols());
     if (assignments.size() < topics) {

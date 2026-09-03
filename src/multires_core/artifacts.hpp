@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -72,6 +73,12 @@ RowMajorMatrixXd read_float64_matrix(
     const fs::path& root, const json& specification);
 
 json read_json(const fs::path& path);
+const json& require_object_field(const json& parent, const char* name);
+void reject_unknown_keys(
+    const json& value, std::initializer_list<const char*> known,
+    const std::string& context);
+fs::path resolve_request_path(
+    const fs::path& request_path, const std::string& value);
 void write_json(const fs::path& path, const json& value, int indent = -1);
 void write_json_atomic(
     const fs::path& path, const json& value, int indent = -1);

@@ -187,14 +187,45 @@ std::vector<std::unordered_map<int32_t, double>> raw_halo_scores(
     return scores;
 }
 
+Eigen::VectorXd classifier_probabilities(
+        const SceneClassifierResult& classifier,
+        const RowMajorMatrixXd* fine_compositions,
+        int32_t row, int32_t scenes) {
+    if (classifier.fine_probabilities.rows() > 0) {
+        return classifier.fine_probabilities.row(row).transpose();
+    }
+    if (!classifier.plugin_model_available || fine_compositions == nullptr) {
+        throw std::invalid_argument(
+            "Classifier probabilities are unavailable");
+    }
+    const Eigen::VectorXd classes = classifier.plugin_model.probabilities(
+        fine_compositions->row(row).transpose());
+    if (classes.size()
+            != static_cast<int32_t>(classifier.model_class_to_scene.size())) {
+        throw std::runtime_error("Classifier class mapping is invalid");
+    }
+    Eigen::VectorXd output = Eigen::VectorXd::Zero(scenes);
+    for (int32_t candidate = 0; candidate < classes.size(); ++candidate) {
+        const int32_t scene = classifier.model_class_to_scene[
+            static_cast<size_t>(candidate)];
+        if (scene < 0 || scene >= scenes) {
+            throw std::runtime_error("Classifier scene mapping is invalid");
+        }
+        output(scene) = classes(candidate);
+    }
+    return output;
+}
+
 std::vector<int32_t> probability_predictions(
-        const Eigen::Ref<const RowMajorMatrixXd>& probabilities,
+        const SceneClassifierResult& classifier,
+        const RowMajorMatrixXd* fine_compositions,
+        int32_t rows, int32_t scenes,
         const std::vector<int32_t>& components,
         const std::vector<int32_t>& scene_component,
         const std::vector<uint8_t>& eligible,
         const std::vector<int32_t>* inherited = nullptr) {
-    std::vector<int32_t> output(static_cast<size_t>(probabilities.rows()), -1);
-    for (int32_t row = 0; row < probabilities.rows(); ++row) {
+    std::vector<int32_t> output(static_cast<size_t>(rows), -1);
+    for (int32_t row = 0; row < rows; ++row) {
         if (inherited != nullptr
             && !eligible[static_cast<size_t>((*inherited)[row])]) {
             output[static_cast<size_t>(row)] = (*inherited)[row];
@@ -203,11 +234,13 @@ std::vector<int32_t> probability_predictions(
         int32_t selected = -1;
         double best = -1.0;
         double total = 0.0;
-        for (int32_t scene = 0; scene < probabilities.cols(); ++scene) {
+        const Eigen::VectorXd probabilities = classifier_probabilities(
+            classifier, fine_compositions, row, scenes);
+        for (int32_t scene = 0; scene < scenes; ++scene) {
             if (!eligible[static_cast<size_t>(scene)]
                 || scene_component[static_cast<size_t>(scene)]
                     != components[static_cast<size_t>(row)]) continue;
-            const double value = probabilities(row, scene);
+            const double value = probabilities(scene);
             total += value;
             if (value > best || (value == best && scene < selected)) {
                 best = value;
@@ -246,6 +279,8 @@ SceneClassifierResult fit_plugin_scene_classifier(
     const int32_t microclusters = static_cast<int32_t>(
         microcluster_membership.size());
     const int32_t scenes = canonical_scene_count(microcluster_membership);
+    result.fine_rows = fine_compositions.rows();
+    result.scene_columns = scenes;
     if (fine_compositions.rows() < 2 || fine_compositions.cols() < 2
         || representative_rows.size() != static_cast<size_t>(microclusters)
         || microcluster_fine_counts.size()
@@ -413,26 +448,6 @@ SceneClassifierResult fit_plugin_scene_classifier(
             std::string("classifier_refit_failed: ") + error.what();
         return result;
     }
-    result.fine_probabilities = RowMajorMatrixXd::Zero(
-        fine_compositions.rows(), scenes);
-    for (int32_t point = 0; point < fine_compositions.rows(); ++point) {
-        const Eigen::VectorXd probabilities = fitted.model.probabilities(
-            fine_compositions.row(point).transpose());
-        double normalization = 0.0;
-        for (int32_t candidate = 0; candidate < probabilities.size();
-                ++candidate) {
-            const int32_t scene = class_to_scene[static_cast<size_t>(candidate)];
-            if (per_scene_component[static_cast<size_t>(scene)]
-                    != fine_component_labels[static_cast<size_t>(point)]) {
-                continue;
-            }
-            result.fine_probabilities(point, scene) = probabilities(candidate);
-            normalization += probabilities(candidate);
-        }
-        if (normalization > 0.0) {
-            result.fine_probabilities.row(point) /= normalization;
-        }
-    }
     result.plugin_model = fitted.model;
     result.model_class_to_scene = class_to_scene;
     result.plugin_model_available = true;
@@ -447,9 +462,9 @@ SceneClassifierResult use_lrvb_scene_probabilities(
         || !audited_plugin.plugin_model_available
         || audited_plugin.mode != SceneCoreMode::ClassifierPlugin
         || fine_probabilities.rows()
-            != audited_plugin.fine_probabilities.rows()
+            != audited_plugin.fine_rows
         || fine_probabilities.cols()
-            != audited_plugin.fine_probabilities.cols()
+            != audited_plugin.scene_columns
         || !fine_probabilities.allFinite()
         || (fine_probabilities.array() < 0.0).any()
         || (fine_probabilities.rowwise().sum().array() <= 0.0).any()) {
@@ -469,7 +484,8 @@ FineSceneLevel construct_fine_scene_level(
         const RawClusteringGraph& fine_raw_graph,
         SceneCoreMode requested_mode,
         const SceneClassifierResult* classifier,
-        const SceneConstructionOptions& options) {
+        const SceneConstructionOptions& options,
+        const RowMajorMatrixXd* fine_compositions) {
     validate_scene_options(options);
     validate_fine_raw_graph(fine_raw_graph);
     const int32_t microclusters = static_cast<int32_t>(
@@ -499,13 +515,21 @@ FineSceneLevel construct_fine_scene_level(
     result.applied_core_mode = SceneCoreMode::Inherit;
     result.fine_partition_membership = inherited;
     if (requested_mode != SceneCoreMode::Inherit) {
+        const bool dense_probabilities = classifier != nullptr
+            && classifier->fine_probabilities.rows() == fine_raw_graph.n_nodes
+            && classifier->fine_probabilities.cols() == scenes;
+        const bool streamed_plugin = classifier != nullptr
+            && classifier->mode == SceneCoreMode::ClassifierPlugin
+            && classifier->plugin_model_available
+            && fine_compositions != nullptr
+            && fine_compositions->rows() == fine_raw_graph.n_nodes
+            && fine_compositions->cols()
+                == classifier->plugin_model.coefficients.cols();
         if (classifier == nullptr || !classifier->attempted
             || !classifier->passed || classifier->mode != requested_mode
             || classifier->eligible_scene.size()
                 != static_cast<size_t>(scenes)
-            || classifier->fine_probabilities.rows()
-                != fine_raw_graph.n_nodes
-            || classifier->fine_probabilities.cols() != scenes) {
+            || (!dense_probabilities && !streamed_plugin)) {
             result.classifier_fallback = true;
             if (classifier != nullptr) {
                 result.classifier = *classifier;
@@ -517,7 +541,8 @@ FineSceneLevel construct_fine_scene_level(
         } else {
             result.classifier = *classifier;
             result.fine_partition_membership = probability_predictions(
-                classifier->fine_probabilities, fine_component_labels,
+                *classifier, fine_compositions, fine_raw_graph.n_nodes, scenes,
+                fine_component_labels,
                 per_scene_component, classifier->eligible_scene, &inherited);
             result.applied_core_mode = requested_mode;
         }
@@ -559,6 +584,10 @@ FineSceneLevel construct_fine_scene_level(
         result.scene_component_labels.push_back(
             per_scene_component[static_cast<size_t>(partition)]);
     }
+    if (result.n_scenes == 0) {
+        throw std::runtime_error(
+            "Scene level has no clusters meeting minimum_scene_core_members");
+    }
     result.fine_core_membership.resize(result.fine_partition_membership.size());
     for (size_t point = 0;
             point < result.fine_partition_membership.size(); ++point) {
@@ -585,6 +614,8 @@ FineSceneLevel construct_fine_scene_level(
         std::vector<std::pair<int32_t, double>> candidates;
         double core_score = 0.0;
         if (classifier_point) {
+            const Eigen::VectorXd probabilities = classifier_probabilities(
+                result.classifier, fine_compositions, point, scenes);
             double normalization = 0.0;
             for (int32_t scene = 0; scene < scenes; ++scene) {
                 if (result.classifier.eligible_scene[
@@ -592,8 +623,7 @@ FineSceneLevel construct_fine_scene_level(
                     && partition_to_scene[static_cast<size_t>(scene)] >= 0
                     && per_scene_component[static_cast<size_t>(scene)]
                         == fine_component_labels[static_cast<size_t>(point)]) {
-                    normalization +=
-                        result.classifier.fine_probabilities(point, scene);
+                    normalization += probabilities(scene);
                 }
             }
             for (int32_t scene = 0; scene < scenes; ++scene) {
@@ -605,8 +635,7 @@ FineSceneLevel construct_fine_scene_level(
                     continue;
                 }
                 const double score = normalization > 0.0
-                    ? result.classifier.fine_probabilities(point, scene)
-                        / normalization
+                    ? probabilities(scene) / normalization
                     : 0.0;
                 const int32_t created_scene = partition_to_scene[
                     static_cast<size_t>(scene)];
@@ -719,7 +748,13 @@ SceneDag build_scene_dag(
                 child_scene < levels[level].n_scenes; ++child_scene) {
             const auto& candidates = overlap[static_cast<size_t>(child_scene)];
             if (candidates.empty()) {
-                throw std::runtime_error("Scene DAG child has no parent overlap");
+                const int32_t child = node_id[level][
+                    static_cast<size_t>(child_scene)];
+                const int64_t child_count = dag.nodes[
+                    static_cast<size_t>(child)].fine_count;
+                dag.edges.push_back({
+                    0, child, child_count, 1.0, true, false, true});
+                continue;
             }
             int32_t major_parent = -1;
             int64_t major_overlap = -1;

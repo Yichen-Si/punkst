@@ -31,6 +31,12 @@ struct TopicCenterTable {
     RowMajorMatrixXd values;
 };
 
+struct ProjectionFactorSelection {
+    std::vector<int32_t> retained_indices;
+    double retained_mass_proportion = 0.0;
+    bool minimum_restored = false;
+};
+
 struct Options {
     std::vector<ProjectionSpace> projection_spaces{ProjectionSpace::Linear};
     projection::VisualizationWhitening whitening =
@@ -86,6 +92,21 @@ ProjectionData prepare_projection(
     ProjectionSpace space,
     const Eigen::Ref<const Eigen::MatrixXd>& helmert,
     double center_floor);
+
+// Select factors using mass measured only on matched_rows. The optional
+// minimum restoration is intended for local visualization models: when the
+// normal filters retain too few factors, take the most abundant available
+// factors instead. Standalone linear-embed keeps restoration disabled.
+ProjectionFactorSelection select_projection_factors(
+    const Eigen::Ref<const RowMajorMatrixXd>& values,
+    const std::vector<int32_t>& matched_rows,
+    double min_cover_mass, double min_mass,
+    int32_t minimum_factors = 3,
+    bool restore_minimum = false);
+
+TopicCenterTable retain_projection_factors(
+    const TopicCenterTable& theta,
+    const ProjectionFactorSelection& selection);
 
 Eigen::MatrixXd aggregate_cluster_factors(
     const Eigen::Ref<const RowMajorMatrixXd>& values,

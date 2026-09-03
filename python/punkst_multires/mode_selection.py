@@ -331,6 +331,45 @@ def _local_linear_residual(
         observed - coefficients[:, 0]))) / denominator)
 
 
+def parsimonious_column_selection(
+        coordinates: np.ndarray, *, maximum_dimensions: int = 6,
+        parsimony_threshold: float = 0.5,
+        regression_sample_size: int = 5000,
+        regression_neighbors: int = 48,
+        seed: int = 260821) -> tuple[np.ndarray, np.ndarray]:
+    """Select columns in their supplied priority order.
+
+    Rows are sampled uniformly and used with equal regression weight. This is
+    the reusable form used by scene-local selection, whose priority order is
+    local variance rather than global spectral order.
+    """
+    values = np.asarray(coordinates, dtype=np.float64)
+    if (values.ndim != 2 or values.shape[0] <= 2 or values.shape[1] == 0
+            or not np.isfinite(values).all()
+            or maximum_dimensions <= 0
+            or not 0.0 <= parsimony_threshold <= 1.0
+            or regression_sample_size <= 2 or regression_neighbors <= 0):
+        raise ValueError("invalid parsimonious column-selection input")
+    sample_size = min(regression_sample_size, values.shape[0])
+    neighbors = min(regression_neighbors, sample_size - 1)
+    if neighbors <= 0:
+        raise ValueError("parsimonious selection needs at least three rows")
+    rng = np.random.default_rng(seed + 307)
+    sampled = np.sort(rng.choice(
+        values.shape[0], size=sample_size, replace=False))
+    regression_points = values[sampled]
+    selected = [0]
+    residuals = np.full(values.shape[1], np.nan)
+    residuals[0] = 1.0
+    for target in range(1, values.shape[1]):
+        residuals[target] = _local_linear_residual(
+            regression_points, selected, target, neighbors)
+        if (len(selected) < maximum_dimensions
+                and residuals[target] >= parsimony_threshold):
+            selected.append(target)
+    return np.asarray(selected, dtype=np.int64), residuals
+
+
 def parsimonious_mode_selection(
         eigenvectors: np.ndarray, candidate_modes: np.ndarray, *,
         regression_rows: np.ndarray | None = None,
@@ -373,23 +412,14 @@ def parsimonious_mode_selection(
     if options.regression_sample_size > representative_count:
         raise ValueError(
             "regression sample size cannot exceed the representative count")
-    rng = np.random.default_rng(options.seed + 307)
-    sampled_positions = np.sort(rng.choice(
-        representative_count, size=options.regression_sample_size,
-        replace=False))
-    sampled_rows = representative_rows[sampled_positions]
-    regression_points = vectors[sampled_rows][:, candidates]
-    selected = [0]
-    residuals = np.full(len(candidates), np.nan)
-    residuals[0] = 1.0
-    for target in range(1, len(candidates)):
-        residuals[target] = _local_linear_residual(
-            regression_points, selected, target,
-            options.regression_neighbors)
-        if (len(selected) < options.maximum_dimensions
-                and residuals[target] >= options.parsimony_threshold):
-            selected.append(target)
-    return candidates[np.asarray(selected, dtype=np.int64)], residuals
+    selected, residuals = parsimonious_column_selection(
+        vectors[representative_rows][:, candidates],
+        maximum_dimensions=options.maximum_dimensions,
+        parsimony_threshold=options.parsimony_threshold,
+        regression_sample_size=options.regression_sample_size,
+        regression_neighbors=options.regression_neighbors,
+        seed=options.seed)
+    return candidates[selected], residuals
 
 
 def select_level0_embedding(

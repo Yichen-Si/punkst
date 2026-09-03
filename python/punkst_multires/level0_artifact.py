@@ -37,6 +37,8 @@ class Level0Artifact:
     selected_modes: np.ndarray
     selected_frequencies: np.ndarray
     unweighted_coordinates: np.ndarray
+    alternate_modes: np.ndarray
+    alternate_unweighted_coordinates: np.ndarray
     eligible_modes: np.ndarray
     regression_residuals: np.ndarray
     localization_eligible: np.ndarray
@@ -94,7 +96,8 @@ def write_level0_artifact(
         microcluster_sizes: np.ndarray, preparation_fingerprint: str,
         spectrum_fingerprint: str,
         display_identifiers: list[str] | tuple[str, ...] | None = None,
-        representation_population: str = "microcluster_representatives") -> Path:
+        representation_population: str = "microcluster_representatives",
+        parameters: dict[str, Any] | None = None) -> Path:
     """Publish an unweighted Level-0 artifact and optional public TSVs."""
     output = Path(output)
     frequencies = np.asarray(eigenvalues, dtype=np.float64)
@@ -188,6 +191,12 @@ def write_level0_artifact(
     spectrum = _fingerprint(spectrum_fingerprint, "spectrum_fingerprint")
     coordinates = embedding_coordinates(
         vectors, selection, dictionary_rows=dictionary)
+    selected_set = set(int(mode) for mode in selected)
+    alternate_modes = np.asarray([
+        int(mode) for mode in eligible if int(mode) not in selected_set
+    ][:20], dtype=np.int32)
+    alternate_coordinates = np.asarray(
+        vectors[dictionary][:, alternate_modes], dtype=np.float32)
 
     def writer(root: Path) -> None:
         population = {
@@ -209,6 +218,12 @@ def write_level0_artifact(
                 root, "selected_frequencies.f64", frequencies[selected]),
             "unweighted_coordinates": write_array(
                 root, "unweighted_coordinates.f32", coordinates, "float32"),
+            "alternate_count": int(len(alternate_modes)),
+            "alternate_modes": write_array(
+                root, "alternate_modes.i32", alternate_modes, "int32"),
+            "alternate_unweighted_coordinates": write_array(
+                root, "alternate_unweighted_coordinates.f32",
+                alternate_coordinates, "float32"),
         }
         diagnostics = {
             "dictionary_modes": int(len(frequencies)),
@@ -274,6 +289,17 @@ def write_level0_artifact(
                     stream.write(
                         f"{axis}\t{int(mode)}\t{frequencies[mode]:.17g}"
                         f"\t{residuals[mode]:.17g}\n")
+            alternate_path = root / "level0_alternate_modes.tsv"
+            with alternate_path.open("w", encoding="utf-8") as stream:
+                stream.write("id")
+                for mode in alternate_modes:
+                    stream.write(f"\tmode_{int(mode)}")
+                stream.write("\n")
+                for row, identifier in enumerate(display_identifiers):
+                    stream.write(identifier)
+                    for value in alternate_coordinates[row]:
+                        stream.write(f"\t{float(value):.9g}")
+                    stream.write("\n")
 
             def checksum(path: Path) -> str:
                 digest = hashlib.sha256()
@@ -287,6 +313,8 @@ def write_level0_artifact(
                 "embedding_sha256": checksum(embedding_path),
                 "axes": axes_path.name,
                 "axes_sha256": checksum(axes_path),
+                "alternate_modes": alternate_path.name,
+                "alternate_modes_sha256": checksum(alternate_path),
             }
         manifest = {
             "artifact_type": ARTIFACT_TYPE,
@@ -305,6 +333,7 @@ def write_level0_artifact(
                 "preparation": preparation,
                 "spectrum": spectrum,
             },
+            "parameters": dict(parameters or {}),
             "public_tables": public_tables,
         }
         arrays: list[dict[str, Any]] = []
@@ -343,7 +372,7 @@ def load_level0_artifact(
     public_tables = manifest.get("public_tables", {})
     if not isinstance(public_tables, dict):
         raise ArtifactError("Level-0 public_tables must be an object")
-    for name in ("embedding", "axes"):
+    for name in ("embedding", "axes", "alternate_modes"):
         if name not in public_tables:
             continue
         relative = public_tables.get(name)
@@ -397,6 +426,14 @@ def load_level0_artifact(
     selected_frequencies = _array(root, axes, "frequencies", "float64")
     coordinates = _array(
         root, axes, "unweighted_coordinates", "float32")
+    if "alternate_modes" in axes or "alternate_unweighted_coordinates" in axes:
+        alternate_modes = _array(root, axes, "alternate_modes", "int32")
+        alternate_coordinates = _array(
+            root, axes, "alternate_unweighted_coordinates", "float32")
+    else:
+        alternate_modes = np.empty(0, dtype=np.int32)
+        alternate_coordinates = np.empty(
+            (len(dictionary_rows), 0), dtype=np.float32)
     eligible_modes = _array(root, selection, "eligible_modes", "int32")
     regression_residuals = _array(
         root, selection, "regression_residuals", "float64")
@@ -418,6 +455,7 @@ def load_level0_artifact(
     fine_nodes = population.get("fine_nodes")
     dictionary_modes = selection.get("dictionary_modes")
     axis_count = axes.get("count")
+    alternate_count = axes.get("alternate_count", 0)
     scalar_counts = (
         display_nodes, dictionary_nodes, fine_nodes, dictionary_modes,
         axis_count)
@@ -428,6 +466,10 @@ def load_level0_artifact(
             or display_nodes != len(microcluster_sizes)
             or axis_count != len(selected_modes)
             or coordinates.shape != (display_nodes, axis_count)
+            or not isinstance(alternate_count, int)
+            or alternate_count < 0 or alternate_count > 20
+            or len(alternate_modes) != alternate_count
+            or alternate_coordinates.shape != (display_nodes, alternate_count)
             or selected_frequencies.shape != (axis_count,)
             or any(values.shape != (dictionary_modes,) for values in (
                 regression_residuals, localization_eligible,
@@ -466,9 +508,16 @@ def load_level0_artifact(
             or np.any(np.diff(eligible_modes) <= 0)
             or not np.all(np.isin(selected_modes, eligible_modes))):
         raise ArtifactError("Level-0 selected modes are invalid")
+    if (np.any(alternate_modes < 0)
+            or np.any(alternate_modes >= dictionary_modes)
+            or np.any(np.diff(alternate_modes) <= 0)
+            or np.any(np.isin(alternate_modes, selected_modes))
+            or not np.all(np.isin(alternate_modes, eligible_modes))):
+        raise ArtifactError("Level-0 alternate modes are invalid")
     if (not np.isfinite(selected_frequencies).all()
             or np.any(selected_frequencies < 0.0)
             or not np.isfinite(coordinates).all()
+            or not np.isfinite(alternate_coordinates).all()
             or np.any((localization_eligible != 0)
                       & (localization_eligible != 1))
             or not all(np.isfinite(values).all() for values in (
@@ -498,6 +547,8 @@ def load_level0_artifact(
         selected_modes=selected_modes,
         selected_frequencies=selected_frequencies,
         unweighted_coordinates=coordinates,
+        alternate_modes=alternate_modes,
+        alternate_unweighted_coordinates=alternate_coordinates,
         eligible_modes=eligible_modes,
         regression_residuals=regression_residuals,
         localization_eligible=localization_eligible,

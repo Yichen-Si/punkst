@@ -46,8 +46,17 @@ std::vector<int32_t> membership_of(const LeidenResult& result) {
 }
 
 void validate_options(const ResolutionSelectionOptions& options) {
+    const bool scene_bounds_disabled =
+        options.level1_scene_count_minimum == 0
+        && options.level1_scene_count_maximum == 0;
+    const bool scene_bounds_valid =
+        options.level1_scene_count_minimum > 0
+        && options.level1_scene_count_maximum
+            >= options.level1_scene_count_minimum;
     if (options.level1_c90_minimum <= 0
         || options.level1_c90_maximum < options.level1_c90_minimum
+        || (!scene_bounds_disabled && !scene_bounds_valid)
+        || options.minimum_scene_core_members <= 0
         || options.minimum_levels <= 0
         || options.maximum_levels < options.minimum_levels
         || !(options.next_level_c90_multiplier > 1.0)
@@ -57,6 +66,7 @@ void validate_options(const ResolutionSelectionOptions& options) {
         || options.maximum_scout_steps <= 0
         || options.maximum_midpoints < 0 || options.final_restarts <= 0
         || options.stop_c90 < options.level1_c90_minimum
+        || options.maximum_scan_communities <= 0
         || options.maximum_scan_steps < 2
         || !(options.initial_resolution > 0.0)
         || !(options.scout_resolution_factor > 1.0)
@@ -238,6 +248,7 @@ SelectedResolutionLevel make_level(int32_t level, int32_t evaluation,
     out.resolution = source.diagnostics.resolution;
     out.c90 = source.diagnostics.c90;
     out.n_communities = source.diagnostics.n_communities;
+    out.retained_scenes = source.diagnostics.retained_scenes;
     out.mean_pairwise_ari = source.diagnostics.mean_pairwise_ari;
     out.minimum_pairwise_ari = source.diagnostics.minimum_pairwise_ari;
     out.stable_plateau = stable;
@@ -248,6 +259,31 @@ SelectedResolutionLevel make_level(int32_t level, int32_t evaluation,
 }
 
 } // namespace
+
+int32_t count_retained_scenes(
+        const std::vector<int32_t>& membership,
+        const std::vector<int64_t>& fine_point_counts,
+        int64_t minimum_scene_core_members) {
+    if (membership.empty() || membership.size() != fine_point_counts.size()
+            || minimum_scene_core_members <= 0) {
+        throw std::invalid_argument("Invalid retained-scene count input");
+    }
+    const int32_t maximum = *std::max_element(
+        membership.begin(), membership.end());
+    if (maximum < 0) {
+        throw std::invalid_argument("Partition membership is invalid");
+    }
+    std::vector<int64_t> counts(static_cast<size_t>(maximum + 1), 0);
+    for (size_t node = 0; node < membership.size(); ++node) {
+        const int32_t community = membership[node];
+        if (community < 0 || fine_point_counts[node] <= 0) {
+            throw std::invalid_argument("Partition membership is invalid");
+        }
+        counts[static_cast<size_t>(community)] += fine_point_counts[node];
+    }
+    return static_cast<int32_t>(std::count_if(counts.begin(), counts.end(),
+        [&](int64_t count) { return count >= minimum_scene_core_members; }));
+}
 
 ResolutionSelectionResult select_stable_resolutions(
         const RawClusteringGraph& graph,
@@ -273,9 +309,16 @@ ResolutionSelectionResult select_stable_resolutions(
         ScoutRecord record;
         record.membership = membership_of(run);
         audit_components(record.membership, graph.component_labels);
-        record.diagnostics = {resolution,
-            weighted_c90(record.membership, fine_point_counts),
-            run.n_communities, run.quality, run.iterations, run.converged};
+        record.diagnostics.resolution = resolution;
+        record.diagnostics.c90 = weighted_c90(
+            record.membership, fine_point_counts);
+        record.diagnostics.n_communities = run.n_communities;
+        record.diagnostics.retained_scenes = count_retained_scenes(
+            record.membership, fine_point_counts,
+            options.minimum_scene_core_members);
+        record.diagnostics.quality = run.quality;
+        record.diagnostics.iterations = run.iterations;
+        record.diagnostics.converged = run.converged;
         return scouts.emplace(resolution, std::move(record)).first->second;
     };
 
@@ -417,6 +460,14 @@ ResolutionSelectionResult select_stable_resolutions(
         diagnostics.c90 = weighted_c90(
             record.medoid_membership, fine_point_counts);
         diagnostics.n_communities = runs[static_cast<size_t>(medoid)].n_communities;
+        diagnostics.mean_n_communities = std::accumulate(
+            runs.begin(), runs.end(), 0.0,
+            [](double total, const LeidenResult& run) {
+                return total + run.n_communities;
+            }) / static_cast<double>(runs.size());
+        diagnostics.retained_scenes = count_retained_scenes(
+            record.medoid_membership, fine_point_counts,
+            options.minimum_scene_core_members);
         diagnostics.mean_pairwise_ari = pair_count > 0
             ? pairwise_sum / pair_count : 1.0;
         diagnostics.minimum_pairwise_ari = pairwise_minimum;
@@ -438,15 +489,30 @@ ResolutionSelectionResult select_stable_resolutions(
         finals.push_back(std::move(record));
     };
 
-    for (const double resolution : resolutions) evaluate_final(resolution);
+    for (const double initial_resolution : resolutions) {
+        evaluate_final(initial_resolution);
+        if (finals.back().diagnostics.mean_n_communities
+                > options.maximum_scan_communities) {
+            break;
+        }
+    }
     std::vector<int32_t> singleton_membership(
         static_cast<size_t>(graph.n_nodes));
     std::iota(singleton_membership.begin(), singleton_membership.end(), 0);
-    const int32_t effective_stop_c90 = std::min(options.stop_c90,
-        weighted_c90(singleton_membership, fine_point_counts));
+    const int32_t maximum_possible_c90 = weighted_c90(
+        singleton_membership, fine_point_counts);
+    const int32_t requested_stop_c90 =
+        options.level1_scene_count_minimum > 0
+        ? std::max(options.stop_c90,
+            options.level1_scene_count_minimum)
+        : options.stop_c90;
+    const int32_t effective_stop_c90 = std::min(
+        requested_stop_c90, maximum_possible_c90);
     double resolution = resolutions.back();
     while (static_cast<int32_t>(finals.size()) < options.maximum_scan_steps
-            && finals.back().diagnostics.c90 < effective_stop_c90) {
+            && finals.back().diagnostics.c90 < effective_stop_c90
+            && finals.back().diagnostics.mean_n_communities
+                <= options.maximum_scan_communities) {
         const double next = std::min(options.maximum_resolution,
             resolution * options.scan_resolution_factor);
         if (next == resolution) break;
@@ -496,6 +562,8 @@ ResolutionSelectionResult select_stable_resolutions(
                     incumbent.c90 = finals[representative].diagnostics.c90;
                     incumbent.n_communities =
                         finals[representative].diagnostics.n_communities;
+                    incumbent.retained_scenes =
+                        finals[representative].diagnostics.retained_scenes;
                     incumbent.membership =
                         finals[representative].medoid_membership;
                 }
@@ -514,6 +582,8 @@ ResolutionSelectionResult select_stable_resolutions(
         plateau.c90 = finals[representative].diagnostics.c90;
         plateau.n_communities =
             finals[representative].diagnostics.n_communities;
+        plateau.retained_scenes =
+            finals[representative].diagnostics.retained_scenes;
         plateau.minimum_seed_stability = std::min(
             previous.diagnostics.minimum_pairwise_ari,
             current_final.diagnostics.minimum_pairwise_ari);
@@ -524,15 +594,27 @@ ResolutionSelectionResult select_stable_resolutions(
     }
 
     std::vector<SelectedResolutionLevel> levels;
+    const bool constrain_level1_scenes =
+        options.level1_scene_count_minimum > 0;
+    auto level1_in_range = [&](const ResolutionEvaluation& value) {
+        if (constrain_level1_scenes) {
+            return value.retained_scenes
+                    >= options.level1_scene_count_minimum
+                && value.retained_scenes
+                    <= options.level1_scene_count_maximum;
+        }
+        return value.c90 >= options.level1_c90_minimum
+            && value.c90 <= options.level1_c90_maximum;
+    };
     int32_t level1_eval = -1;
     int32_t level1_plateau = -1;
     for (size_t plateau = 0; plateau < plateaus.size(); ++plateau) {
         for (int32_t evaluation = plateaus[plateau].first_evaluation;
                 evaluation <= plateaus[plateau].last_evaluation; ++evaluation) {
-            const int32_t c90 = finals[static_cast<size_t>(evaluation)]
-                .diagnostics.c90;
-            if (c90 < options.level1_c90_minimum
-                    || c90 > options.level1_c90_maximum) continue;
+            if (!level1_in_range(
+                    finals[static_cast<size_t>(evaluation)].diagnostics)) {
+                continue;
+            }
             if (level1_eval < 0 || more_stable(
                     finals[static_cast<size_t>(evaluation)],
                     finals[static_cast<size_t>(level1_eval)])) {
@@ -546,35 +628,56 @@ ResolutionSelectionResult select_stable_resolutions(
             true, false, false, finals));
     } else {
         int32_t fallback = -1;
-        bool any_in_range = std::any_of(finals.begin(), finals.end(),
-            [&](const FinalRecord& value) {
-                return c90_distance(value.diagnostics.c90,
-                    options.level1_c90_minimum,
-                    options.level1_c90_maximum) == 0;
-            });
-        for (size_t index = 0; index < finals.size(); ++index) {
-            const int32_t distance = c90_distance(finals[index].diagnostics.c90,
-                options.level1_c90_minimum, options.level1_c90_maximum);
-            if (any_in_range && distance != 0) continue;
+        if (constrain_level1_scenes) {
+            for (size_t index = 0; index < finals.size(); ++index) {
+                if (!level1_in_range(finals[index].diagnostics)) continue;
+                if (fallback < 0 || more_stable(finals[index],
+                        finals[static_cast<size_t>(fallback)])) {
+                    fallback = static_cast<int32_t>(index);
+                }
+            }
             if (fallback < 0) {
-                fallback = static_cast<int32_t>(index);
-                continue;
+                throw std::runtime_error(
+                    "Resolution scan found no Level-1 partition with a "
+                    "retained scene count in the requested range");
             }
-            const int32_t incumbent_distance = c90_distance(
-                finals[static_cast<size_t>(fallback)].diagnostics.c90,
-                options.level1_c90_minimum, options.level1_c90_maximum);
-            if (distance < incumbent_distance
-                || (distance == incumbent_distance
-                    && more_stable(finals[index],
-                        finals[static_cast<size_t>(fallback)]))) {
-                fallback = static_cast<int32_t>(index);
+            levels.push_back(make_level(1, fallback, -1,
+                false, true, false, finals));
+        } else {
+            bool any_in_range = std::any_of(finals.begin(), finals.end(),
+                [&](const FinalRecord& value) {
+                    return c90_distance(value.diagnostics.c90,
+                        options.level1_c90_minimum,
+                        options.level1_c90_maximum) == 0;
+                });
+            for (size_t index = 0; index < finals.size(); ++index) {
+                const int32_t distance = c90_distance(
+                    finals[index].diagnostics.c90,
+                    options.level1_c90_minimum,
+                    options.level1_c90_maximum);
+                if (any_in_range && distance != 0) continue;
+                if (fallback < 0) {
+                    fallback = static_cast<int32_t>(index);
+                    continue;
+                }
+                const int32_t incumbent_distance = c90_distance(
+                    finals[static_cast<size_t>(fallback)].diagnostics.c90,
+                    options.level1_c90_minimum,
+                    options.level1_c90_maximum);
+                if (distance < incumbent_distance
+                    || (distance == incumbent_distance
+                        && more_stable(finals[index],
+                            finals[static_cast<size_t>(fallback)]))) {
+                    fallback = static_cast<int32_t>(index);
+                }
             }
+            if (fallback < 0) {
+                throw std::runtime_error(
+                    "Resolution scan produced no partition");
+            }
+            levels.push_back(make_level(1, fallback, -1,
+                false, true, false, finals));
         }
-        if (fallback < 0) {
-            throw std::runtime_error("Resolution scan produced no partition");
-        }
-        levels.push_back(make_level(1, fallback, -1,
-            false, true, false, finals));
     }
 
     while (static_cast<int32_t>(levels.size()) < options.maximum_levels) {

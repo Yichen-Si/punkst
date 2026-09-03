@@ -295,8 +295,14 @@ MetricGraphResult build_metric_graph(const fs::path& theta_path,
     if (options.coarsening_enabled) {
         begin = Clock::now();
         const DiffusionGraph adapted = coarsening_adapter(out.graph);
-        out.coarsening = coarsen_diffusion_graph(
+        GraphCoarseningResult coarsening = coarsen_diffusion_graph(
             adapted, out.theta.values, options.coarsening);
+        // An inactive coarsening request is semantically the fine graph.  Do
+        // not publish an identity membership or let downstream code mistake
+        // it for a distinct coarse population.
+        if (coarsening.diagnostics.activated) {
+            out.coarsening = std::move(coarsening);
+        }
         out.timings.coarsening_seconds = elapsed(begin);
     }
     out.timings.total_seconds = elapsed(total_begin);

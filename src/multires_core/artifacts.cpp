@@ -560,6 +560,34 @@ json read_json(const fs::path& path) {
     return value;
 }
 
+const json& require_object_field(const json& parent, const char* name) {
+    const auto found = parent.find(name);
+    if (found == parent.end() || !found->is_object()) {
+        throw std::invalid_argument(std::string(name) + " must be a JSON object");
+    }
+    return *found;
+}
+
+void reject_unknown_keys(const json& value,
+        std::initializer_list<const char*> known,
+        const std::string& context) {
+    std::unordered_set<std::string> accepted;
+    for (const char* key : known) accepted.emplace(key);
+    for (const auto& item : value.items()) {
+        if (!accepted.count(item.key())) {
+            throw std::invalid_argument(
+                "Unknown " + context + " key: " + item.key());
+        }
+    }
+}
+
+fs::path resolve_request_path(const fs::path& request_path,
+        const std::string& value) {
+    fs::path output(value);
+    if (output.is_relative()) output = request_path.parent_path() / output;
+    return fs::absolute(output).lexically_normal();
+}
+
 void write_json(const fs::path& path, const json& value, int indent) {
     if (!path.parent_path().empty()) fs::create_directories(path.parent_path());
     std::ofstream output(path, std::ios::binary);

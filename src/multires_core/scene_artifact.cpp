@@ -79,6 +79,8 @@ json level_summary(const FineSceneLevel& level) {
         {"level", level.metadata.level},
         {"resolution", level.metadata.resolution},
         {"selection_c90", level.metadata.c90},
+        {"plateau_index", level.metadata.plateau_index},
+        {"plateau_fallback", level.metadata.plateau_fallback},
         {"partition_clusters", level.n_partition_clusters},
         {"scenes", level.n_scenes},
         {"tail_scenes", tails},
@@ -144,6 +146,11 @@ SceneArtifactResult run_multires_scenes(
     if (!selected_levels.is_array() || selected_levels.empty()) {
         throw std::runtime_error("Selection artifact has no selected levels");
     }
+    const json& selection_options = selection.at("selection_options");
+    const int32_t level1_scene_minimum = selection_options.value(
+        "level1_scene_count_minimum", 0);
+    const int32_t level1_scene_maximum = selection_options.value(
+        "level1_scene_count_maximum", 0);
 
     std::optional<ThetaTable> theta;
     if (options.core_mode == SceneCoreMode::ClassifierPlugin) {
@@ -202,12 +209,21 @@ SceneArtifactResult run_multires_scenes(
                 metadata, scan_membership, graph.fine_to_microcluster,
                 graph.fine.graph.component_labels, graph.fine.graph,
                 SceneCoreMode::ClassifierPlugin, &classifier,
-                options.scenes));
+                options.scenes, &theta->values));
         } else {
             result.levels.push_back(construct_fine_scene_level(
                 metadata, full_membership, identity,
                 graph.fine.graph.component_labels, graph.fine.graph,
                 SceneCoreMode::Inherit, nullptr, options.scenes));
+        }
+        if (metadata.level == 1 && level1_scene_minimum > 0) {
+            const int32_t scenes = result.levels.back().n_scenes;
+            if (scenes < level1_scene_minimum
+                    || scenes > level1_scene_maximum) {
+                throw std::runtime_error(
+                    "Scene construction produced " + std::to_string(scenes)
+                    + " Level-1 scenes, outside the requested range");
+            }
         }
     }
     result.dag = build_scene_dag(result.levels, options.scenes);
@@ -221,6 +237,7 @@ void write_scene_artifact(const fs::path& output,
     publish_directory_atomic(fs::absolute(output), [&](const fs::path& root) {
         fs::create_directories(root / "levels");
         fs::create_directories(root / "internal");
+        std::vector<json> array_specs;
         const fs::path membership_path = root / "scene_memberships.tsv";
         std::ofstream memberships(membership_path);
         memberships << std::setprecision(17)
@@ -288,6 +305,57 @@ void write_scene_artifact(const fs::path& output,
             summary["scenes_table"] = fs::relative(
                 scenes_path, root).string();
             summary["scenes_sha256"] = sha256_file(scenes_path);
+            std::vector<int32_t> membership_points;
+            std::vector<int32_t> membership_scenes;
+            std::vector<double> membership_scores;
+            std::vector<int32_t> membership_ranks;
+            std::vector<uint8_t> membership_core;
+            membership_points.reserve(level.memberships.size());
+            membership_scenes.reserve(level.memberships.size());
+            membership_scores.reserve(level.memberships.size());
+            membership_ranks.reserve(level.memberships.size());
+            membership_core.reserve(level.memberships.size());
+            for (const SceneHaloMembership& row : level.memberships) {
+                membership_points.push_back(row.fine_node);
+                membership_scenes.push_back(row.scene);
+                membership_scores.push_back(row.score);
+                membership_ranks.push_back(row.rank);
+                membership_core.push_back(static_cast<uint8_t>(row.core));
+            }
+            const std::string internal_prefix = "internal/" + stem;
+            const json partition_spec = write_array(root,
+                internal_prefix + "_partition.i32",
+                level.fine_partition_membership);
+            const json core_spec = write_array(root,
+                internal_prefix + "_core_scene.i32",
+                level.fine_core_membership);
+            const json point_spec = write_array(root,
+                internal_prefix + "_membership_point.i32",
+                membership_points);
+            const json scene_spec = write_array(root,
+                internal_prefix + "_membership_scene.i32",
+                membership_scenes);
+            const json score_spec = write_array(root,
+                internal_prefix + "_membership_score.f64",
+                membership_scores);
+            const json rank_spec = write_array(root,
+                internal_prefix + "_membership_rank.i32",
+                membership_ranks);
+            const json membership_core_spec = write_array(root,
+                internal_prefix + "_membership_core.u8",
+                membership_core);
+            array_specs.insert(array_specs.end(), {partition_spec, core_spec,
+                point_spec, scene_spec, score_spec, rank_spec,
+                membership_core_spec});
+            summary["internal"] = {
+                {"fine_partition_membership", partition_spec},
+                {"fine_core_membership", core_spec},
+                {"membership_points", point_spec},
+                {"membership_scenes", scene_spec},
+                {"membership_scores", score_spec},
+                {"membership_ranks", rank_spec},
+                {"membership_core", membership_core_spec}
+            };
             if (level.classifier.plugin_model_available) {
                 const fs::path model_path = root / (
                     "internal/" + stem + "_classifier.tsv");
@@ -338,20 +406,26 @@ void write_scene_artifact(const fs::path& output,
         const fs::path edge_path = root / "scene_edges.tsv";
         std::ofstream edges(edge_path);
         edges << std::setprecision(17)
-            << "parent\tchild\toverlap\tchild_fraction\tmajor\tportal\n";
+            << "parent\tchild\toverlap\tchild_fraction\tmajor\tportal"
+               "\troot_fallback\n";
         for (const SceneDagEdge& edge : result.dag.edges) {
             edges << edge.parent << '\t' << edge.child << '\t'
                 << edge.overlap << '\t' << edge.child_fraction << '\t'
                 << static_cast<int32_t>(edge.major) << '\t'
-                << static_cast<int32_t>(edge.portal) << '\n';
+                << static_cast<int32_t>(edge.portal) << '\t'
+                << static_cast<int32_t>(edge.root_fallback) << '\n';
         }
         edges.close();
         require_stream(edges, edge_path);
 
         int32_t portals = 0;
+        int32_t root_fallbacks = 0;
         int32_t merges = 0;
         int32_t splits = 0;
-        for (const SceneDagEdge& edge : result.dag.edges) portals += edge.portal;
+        for (const SceneDagEdge& edge : result.dag.edges) {
+            portals += edge.portal;
+            root_fallbacks += edge.root_fallback;
+        }
         for (const SceneDagNode& node : result.dag.nodes) {
             merges += node.merge;
             splits += node.split;
@@ -374,6 +448,7 @@ void write_scene_artifact(const fs::path& output,
                 {"nodes", result.dag.nodes.size()},
                 {"edges", result.dag.edges.size()},
                 {"portal_edges", portals},
+                {"root_fallback_edges", root_fallbacks},
                 {"merge_nodes", merges},
                 {"split_nodes", splits}
             }},
@@ -386,7 +461,8 @@ void write_scene_artifact(const fs::path& output,
                 {"edges_sha256", sha256_file(edge_path)}
             }}
         };
-        manifest["fingerprint"] = artifact_fingerprint(manifest, root, {});
+        manifest["fingerprint"] = artifact_fingerprint(
+            manifest, root, array_specs);
         write_json(root / "manifest.json", manifest, 2);
     });
 }

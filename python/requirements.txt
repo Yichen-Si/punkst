@@ -1,0 +1,7 @@
+# Runtime dependencies for punkst_multires and multires_diagnostics.
+numpy
+scipy
+threadpoolctl
+
+# Optional: install `primme` separately when selecting the `primme` or
+# `scipy-primme` eigensolver backend.

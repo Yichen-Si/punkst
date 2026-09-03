@@ -20,6 +20,7 @@ from .artifacts import (
     artifact_fingerprint,
     canonical_json,
     load_array,
+    manifest_path,
     publish_directory,
     read_manifest,
     verify_artifact_fingerprint,
@@ -86,17 +87,8 @@ class DiffusionGraph:
     edge_rows: np.ndarray
     edge_columns: np.ndarray
     edge_is_bridge: np.ndarray
-    raw_affinities: np.ndarray
-    bandwidth_squared: np.ndarray
-    kernel_weights: np.ndarray
     diffusion_weights: np.ndarray
-    kernel_degree: np.ndarray
-    diffusion_degree: np.ndarray
     node_mass: np.ndarray
-    stationary_probability: np.ndarray
-    bridge_geometric_weights: np.ndarray
-    bridge_kernel_weights: np.ndarray
-    bridge_conductance: np.ndarray
     diagnostics: dict[str, Any]
 
 
@@ -131,11 +123,6 @@ def _object(value: Any, name: str) -> dict[str, Any]:
     return value
 
 
-def _manifest_path(path: Path | str) -> Path:
-    resolved = Path(path).resolve()
-    return resolved / "manifest.json" if resolved.is_dir() else resolved
-
-
 def _load_typed_array(root: Path, specification: Any, dtype: str,
                       name: str) -> np.ndarray:
     spec = _object(specification, name)
@@ -162,9 +149,9 @@ def _validate_sorted_edges(rows: np.ndarray, columns: np.ndarray,
 def load_graph_artifact(path: Path | str, *, verify_fingerprint: bool = True) \
         -> GraphArtifact:
     """Load and validate the diffusion-independent native graph artifact."""
-    manifest_path = _manifest_path(path)
-    root = manifest_path.parent
-    manifest = read_manifest(manifest_path)
+    resolved_manifest = manifest_path(path)
+    root = resolved_manifest.parent
+    manifest = read_manifest(resolved_manifest)
     if manifest.get("artifact_type") != GRAPH_TYPE:
         raise ArtifactError(f"Expected artifact_type {GRAPH_TYPE}")
     if manifest.get("schema_version") != SCHEMA_VERSION:
@@ -379,17 +366,31 @@ def _validate_kernel_options(options: KernelOptions, neighbors: int) -> int:
 
 def _sampled_quantile(values: np.ndarray, probability: float,
                       maximum_sample: int) -> tuple[float, int]:
-    positive = np.asarray(values[(values > 0.0) & np.isfinite(values)])
-    if not len(positive):
+    chunk_size = 1_000_000
+    positive_count = 0
+    for begin in range(0, len(values), chunk_size):
+        chunk = np.asarray(values[begin:begin + chunk_size])
+        positive_count += int(np.count_nonzero(
+            (chunk > 0.0) & np.isfinite(chunk)))
+    if not positive_count:
         raise DiffusionError("Cannot estimate a positive bridge-weight floor")
-    wanted = min(len(positive), maximum_sample)
-    if wanted == len(positive):
-        sample = positive.copy()
-    else:
-        indices = np.floor(
-            np.arange(wanted, dtype=np.longdouble)
-            * len(positive) / wanted).astype(np.int64)
-        sample = positive[indices].copy()
+    wanted = min(positive_count, maximum_sample)
+    target = np.floor(
+        np.arange(wanted, dtype=np.longdouble)
+        * positive_count / wanted).astype(np.int64)
+    sample = np.empty(wanted, dtype=np.float64)
+    seen = 0
+    filled = 0
+    for begin in range(0, len(values), chunk_size):
+        chunk = np.asarray(values[begin:begin + chunk_size])
+        positive = chunk[(chunk > 0.0) & np.isfinite(chunk)]
+        end = seen + len(positive)
+        next_filled = int(np.searchsorted(target, end, side="left"))
+        if next_filled > filled:
+            sample[filled:next_filled] = positive[
+                target[filled:next_filled] - seen]
+            filled = next_filled
+        seen = end
     position = int(math.floor(probability * (len(sample) - 1)))
     sample.partition(position)
     return float(sample[position]), len(sample)
@@ -431,9 +432,17 @@ def construct_diffusion_graph(
 
     rows = np.asarray(graph.edge_rows, dtype=np.int32)
     columns = np.asarray(graph.edge_columns, dtype=np.int32)
-    distances = 1.0 - np.asarray(graph.raw_affinities, dtype=np.float64)
-    denominator = np.sqrt(bandwidth[rows] * bandwidth[columns])
-    base_kernel = np.exp(-distances / denominator)
+    # Bound transient edge-sized allocations.  On the production graph these
+    # vectors dominate memory, so compute both normalization passes in chunks.
+    edge_chunk = 1_000_000
+    base_kernel = np.empty(len(rows), dtype=np.float64)
+    raw_affinities = np.asarray(graph.raw_affinities, dtype=np.float64)
+    for begin in range(0, len(rows), edge_chunk):
+        end = min(len(rows), begin + edge_chunk)
+        denominator = np.sqrt(
+            bandwidth[rows[begin:end]] * bandwidth[columns[begin:end]])
+        base_kernel[begin:end] = np.exp(
+            -(1.0 - raw_affinities[begin:end]) / denominator)
     bridge_floor, quantile_sample_size = _sampled_quantile(
         base_kernel, options.bridge_weight_quantile,
         options.quantile_sample_size)
@@ -461,49 +470,64 @@ def construct_diffusion_graph(
         bridge_conductance[indices] = conductance
         maximum_conductance = max(maximum_conductance, conductance)
 
-    all_rows = np.concatenate((rows, graph.bridge_rows)).astype(
-        np.int32, copy=False)
-    all_columns = np.concatenate((columns, graph.bridge_columns)).astype(
-        np.int32, copy=False)
-    all_kernel = np.concatenate((base_kernel, bridge_kernel))
-    all_raw = np.concatenate((np.asarray(graph.raw_affinities),
-                              np.asarray(graph.bridge_raw_affinities)))
-    all_bridge = np.concatenate((
-        np.zeros(len(rows), dtype=np.uint8),
-        np.ones(len(graph.bridge_rows), dtype=np.uint8)))
-    order = np.lexsort((all_columns, all_rows))
-    all_rows = all_rows[order]
-    all_columns = all_columns[order]
-    all_kernel = all_kernel[order]
-    all_raw = all_raw[order]
-    all_bridge = all_bridge[order]
-    keys = all_rows.astype(np.int64) * graph.nodes + all_columns.astype(np.int64)
-    if np.any(keys[1:] <= keys[:-1]):
-        raise DiffusionError(
-            "Bridge candidates duplicate one another or a canonical kNN edge")
+    if len(graph.bridge_rows):
+        all_rows = np.concatenate((rows, graph.bridge_rows)).astype(
+            np.int32, copy=False)
+        all_columns = np.concatenate((columns, graph.bridge_columns)).astype(
+            np.int32, copy=False)
+        all_kernel = np.concatenate((base_kernel, bridge_kernel))
+        all_bridge = np.concatenate((
+            np.zeros(len(rows), dtype=np.uint8),
+            np.ones(len(graph.bridge_rows), dtype=np.uint8)))
+        order = np.lexsort((all_columns, all_rows))
+        all_rows = all_rows[order]
+        all_columns = all_columns[order]
+        all_kernel = all_kernel[order]
+        all_bridge = all_bridge[order]
+        bridge_keys = list(zip(np.asarray(graph.bridge_rows).tolist(),
+                               np.asarray(graph.bridge_columns).tolist()))
+        if len(set(bridge_keys)) != len(bridge_keys):
+            raise DiffusionError("Bridge candidates duplicate one another")
+    else:
+        # The usual connected-graph path can reuse the canonical source edge
+        # arrays and computed kernel without an edge-sized concatenate/sort.
+        all_rows = rows
+        all_columns = columns
+        all_kernel = base_kernel
+        all_bridge = np.zeros(len(rows), dtype=np.uint8)
 
     kernel_degree = np.zeros(graph.nodes, dtype=np.float64)
     np.add.at(kernel_degree, all_rows, all_kernel)
     np.add.at(kernel_degree, all_columns, all_kernel)
     if np.any(kernel_degree <= 0.0) or not np.isfinite(kernel_degree).all():
         raise DiffusionError("Diffusion graph has a nonpositive kernel degree")
-    diffusion_weights = all_kernel / (
-        np.power(kernel_degree[all_rows], options.alpha)
-        * np.power(kernel_degree[all_columns], options.alpha))
+    diffusion_weights = np.empty(len(all_kernel), dtype=np.float64)
+    for begin in range(0, len(all_kernel), edge_chunk):
+        end = min(len(all_kernel), begin + edge_chunk)
+        diffusion_weights[begin:end] = all_kernel[begin:end] / (
+            np.power(kernel_degree[all_rows[begin:end]], options.alpha)
+            * np.power(kernel_degree[all_columns[begin:end]], options.alpha))
     diffusion_degree = np.zeros(graph.nodes, dtype=np.float64)
     np.add.at(diffusion_degree, all_rows, diffusion_weights)
     np.add.at(diffusion_degree, all_columns, diffusion_weights)
-    node_mass = np.power(diffusion_degree, options.beta + 1.0)
+    np.power(diffusion_degree, options.beta + 1.0, out=diffusion_degree)
+    node_mass = diffusion_degree
     if np.any(node_mass <= 0.0) or not np.isfinite(node_mass).all():
         raise DiffusionError("Diffusion graph has an invalid node mass")
-    stationary = node_mass / float(np.sum(node_mass))
-
-    adjacency = coo_matrix(
-        (np.ones(2 * len(all_rows), dtype=np.uint8),
-         (np.concatenate((all_rows, all_columns)),
-          np.concatenate((all_columns, all_rows)))),
-        shape=(graph.nodes, graph.nodes)).tocsr()
-    final_components, _ = connected_components(adjacency, directed=False)
+    parents = np.arange(component_count, dtype=np.int32)
+    def find(component: int) -> int:
+        while parents[component] != component:
+            parents[component] = parents[parents[component]]
+            component = int(parents[component])
+        return component
+    for first, second in zip(graph.bridge_first_components,
+                             graph.bridge_second_components):
+        first_root = find(int(first))
+        second_root = find(int(second))
+        if first_root != second_root:
+            parents[second_root] = first_root
+    final_components = len({find(component)
+                            for component in range(component_count)})
     if final_components != 1:
         raise DiffusionError(
             f"Bridge repair left {final_components} diffusion components")
@@ -529,14 +553,8 @@ def construct_diffusion_graph(
     }
     return DiffusionGraph(
         nodes=graph.nodes, edge_rows=all_rows, edge_columns=all_columns,
-        edge_is_bridge=all_bridge, raw_affinities=all_raw,
-        bandwidth_squared=bandwidth, kernel_weights=all_kernel,
-        diffusion_weights=diffusion_weights, kernel_degree=kernel_degree,
-        diffusion_degree=diffusion_degree, node_mass=node_mass,
-        stationary_probability=stationary,
-        bridge_geometric_weights=bridge_geometric,
-        bridge_kernel_weights=bridge_kernel,
-        bridge_conductance=bridge_conductance, diagnostics=diagnostics,
+        edge_is_bridge=all_bridge, diffusion_weights=diffusion_weights,
+        node_mass=node_mass, diagnostics=diagnostics,
     )
 
 
@@ -665,18 +683,8 @@ def _write_fine_graph(root: Path, graph: DiffusionGraph,
         "edge_rows": (graph.edge_rows, "int32"),
         "edge_columns": (graph.edge_columns, "int32"),
         "edge_is_bridge": (graph.edge_is_bridge, "uint8"),
-        "raw_affinities": (graph.raw_affinities, "float64"),
-        "bandwidth_squared": (graph.bandwidth_squared, "float64"),
-        "kernel_weights": (graph.kernel_weights, "float64"),
         "diffusion_weights": (graph.diffusion_weights, "float64"),
-        "kernel_degree": (graph.kernel_degree, "float64"),
-        "diffusion_degree": (graph.diffusion_degree, "float64"),
         "node_mass": (graph.node_mass, "float64"),
-        "stationary_probability": (graph.stationary_probability, "float64"),
-        "bridge_geometric_weights": (
-            graph.bridge_geometric_weights, "float64"),
-        "bridge_kernel_weights": (graph.bridge_kernel_weights, "float64"),
-        "bridge_conductance": (graph.bridge_conductance, "float64"),
     }
     specifications: dict[str, Any] = {
         "nodes": graph.nodes, "edges": len(graph.edge_rows),
@@ -712,7 +720,7 @@ def _write_coarse_graph(root: Path, graph: CoarseDiffusionGraph,
 
 def _solve_population(
         root: Path, name: str, operator: GalerkinOperator,
-        probes: np.ndarray, solver_options: SolverOptions,
+        probes: np.ndarray | None, solver_options: SolverOptions,
         graph_fingerprint: str) -> dict[str, Any]:
     request_path = write_eigensolver_request(
         root / f"spectrum_{name}_request", operator.diagonal,
@@ -781,8 +789,7 @@ def run_diffusion(
                 fine.diffusion_weights, fine.node_mass,
                 fine.diffusion_weights * fine.edge_is_bridge)
             populations["points"] = _solve_population(
-                root, "points", operator,
-                np.asarray(graph_source.coordinates), solver_options,
+                root, "points", operator, None, solver_options,
                 graph_source.fingerprint)
 
         coarse_manifest = None
@@ -819,7 +826,7 @@ def run_diffusion(
             "artifact_type": DIFFUSION_TYPE,
             "schema_version": SCHEMA_VERSION,
             "source": {
-                "graph_manifest": str(_manifest_path(graph_path)),
+                "graph_manifest": str(manifest_path(graph_path)),
                 "graph_fingerprint": graph_source.fingerprint,
             },
             "parameters": parameters,

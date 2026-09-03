@@ -17,6 +17,7 @@ from .mode_selection import (
     ModeLocalizationDiagnostics,
     diagnose_mode_localization,
     embedding_coordinates,
+    parsimonious_column_selection,
     parsimonious_mode_selection,
     select_automatic_diffusion_time,
     select_level0_embedding,
@@ -63,8 +64,17 @@ from .diffusion import (
 )
 from .pipeline import (
     BuildOptions,
+    ResumePlan,
     build_level0_artifact,
+    plan_build_resume,
     run_build,
+)
+from .scene_embeddings import (
+    SceneDiffusionView,
+    SceneEmbeddingOptions,
+    load_scene_embeddings,
+    select_scene_diffusion_modes,
+    write_scene_embeddings,
 )
 
 __all__ = [
@@ -82,6 +92,7 @@ __all__ = [
     "ModeLocalizationDiagnostics",
     "diagnose_mode_localization",
     "embedding_coordinates",
+    "parsimonious_column_selection",
     "parsimonious_mode_selection",
     "select_automatic_diffusion_time",
     "select_level0_embedding",
@@ -118,6 +129,13 @@ __all__ = [
     "load_graph_artifact",
     "run_diffusion",
     "BuildOptions",
+    "ResumePlan",
     "build_level0_artifact",
+    "plan_build_resume",
     "run_build",
+    "SceneDiffusionView",
+    "SceneEmbeddingOptions",
+    "load_scene_embeddings",
+    "select_scene_diffusion_modes",
+    "write_scene_embeddings",
 ]

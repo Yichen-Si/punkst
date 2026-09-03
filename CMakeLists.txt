@@ -257,6 +257,12 @@ set(CLUSTERING_CORE_SOURCE_FILES
     src/multires_core/scene_construction.cpp
     src/multires_core/scene_artifact.hpp
     src/multires_core/scene_artifact.cpp
+    src/multires_core/scene_artifact_io.hpp
+    src/multires_core/scene_artifact_io.cpp
+    src/multires_core/scene_projection.hpp
+    src/multires_core/scene_projection.cpp
+    src/multires_core/scene_projection_artifact.hpp
+    src/multires_core/scene_projection_artifact.cpp
 )
 
 if (PUNKST_HAVE_FAISS_ANN)
@@ -343,6 +349,7 @@ set(SOURCE_FILES
     script/multires.cpp
     script/multires_selection.cpp
     script/multires_scenes.cpp
+    script/multires_scene_projections.cpp
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp

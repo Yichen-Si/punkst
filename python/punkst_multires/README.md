@@ -1,308 +1,510 @@
-# Multiresolution spectral workers
+# Multiresolution embedding pipeline
 
-This package is the Python-owned diffusion and spectral stage of the
-multiresolution pipeline. The native `punkst knn-graph` command writes only
-diffusion-independent Hellinger geometry, raw Bhattacharyya affinity, and
-optional coarsening. `punkst-multires diffusion` constructs the self-tuning
-kernel and the Galerkin operator
+`punkst-multires` builds a global embedding, selects a hierarchy of stable
+partitions, turns those partitions into scenes, and creates several local
+views for every scene. This document covers running and configuring the
+pipeline. Mathematical details, artifact schemas, implementation decisions,
+and validation results live in
+[`_notes/multires_implementation.md`](../../_notes/multires_implementation.md).
 
-```text
-A = S^(-1/2) C S^(-1/2)
-```
+## Quickstart
 
-and solves it in the same Python stage. SciPy and the optional PRIMME backend
-are therefore runtime dependencies, not link-time dependencies of `punkst`.
-
-The graph artifact must be created with `--diffusion-sidecar`. Its source
-fingerprint is verified before use. The sidecar supplies directed neighbor
-distances for local bandwidths, normalized Hellinger coordinates for probes,
-and component-bridge geometry; it does not prescribe a kernel.
-
-For a coarsened solve, the Python stage constructs the fine kernel first and
-then sums its normalized edge weights through the native fine-to-microcluster
-mapping. It never rebuilds a kernel among representatives. Reduction spills
-sparse chunks to disk and merges them in balanced rounds, bounding memory by
-the reduced graph plus one input chunk. Representatives are raw-point,
-unweighted squared-Hellinger medoids and are used only as deterministic probes
-and displayed points, not as synthetic coarse observations.
-
-## Artifact contract
-
-Both request and result are directories containing a `manifest.json` and raw
-little-endian, C-order arrays. Array objects in the manifest have `path`,
-`dtype`, `endianness`, `order`, and `shape` fields. Paths must be relative to
-the artifact directory. Schema version 1 supports `float32`, `float64`,
-`int32`, and `uint8` arrays.
-
-The request has artifact type `punkst.multires.eigensolver_request` and these
-required operator arrays:
-
-- `diagonal`: diagonal of `A`, shape `[nodes]`;
-- `off_diagonal_rows`, `off_diagonal_columns`: sorted unique upper-triangle
-  endpoints, shape `[edges]`;
-- `off_diagonal_values`: strictly negative entries of `A`, shape `[edges]`;
-- `mass`: positive diagonal of `S`, shape `[nodes]`.
-
-It also records a positive Gershgorin upper bound. Optional node-by-column
-`probes` make repeated eigenspaces reproducible with respect to representative
-latent coordinates. Deterministic hash probes complete any missing rank.
-Optional bridge rows, columns, and positive unnormalized weights enable
-per-mode bridge-energy diagnostics.
-
-The result has artifact type `punkst.multires.eigensolver_result`. Its
-`eigenvalues` are nonnegative generator frequencies `mu`. Its `eigenvectors`
-are nontrivial eigenfunctions `psi`, stored node-major, and satisfy
-
-```text
-psi.T @ diag(mass / sum(mass)) @ psi = I
-```
-
-The trivial constant eigenfunction is audited but omitted. Diffusion
-coordinates use `psi_r * exp(-tau * mu_r)`.
-
-## Solver behavior
-
-The default backend applies ARPACK to `rho I - A`, requesting the largest
-algebraic eigenvalues. It retries with progressively larger Krylov spaces.
-`backend="primme"` requests the optional Python PRIMME package;
-`backend="scipy-primme"` uses it only after SciPy retries fail. Small systems
-use a dense solve so all available nontrivial modes remain accessible.
-
-`parameters.threads` explicitly limits every BLAS/OpenMP pool loaded by NumPy,
-SciPy, and PRIMME through `threadpoolctl`; its default is one. This is important
-because the libraries may link distinct OpenBLAS builds with different scaling
-behavior. The result manifest records the requested limit and the effective
-thread count of each loaded runtime. SciPy remains the default backend.
-
-Before publishing a result, the worker verifies graph connectedness, the
-known trivial vector, residuals, frequency ordering, mass orthogonality, and
-weighted centering. It reports effective support, maximum leverage, bridge
-energy fractions, retry history, versions, timings, and the complete input
-fingerprint. New results also carry a content fingerprint covering every
-spectral array; the loader continues to accept older schema-v1 results that
-predate that field. Output is written to a sibling temporary directory and
-renamed atomically; an existing result directory is never overwritten.
-
-## Level-0 embedding mode selection
-
-`punkst_multires.mode_selection` keeps the eigensolver output as the complete
-eigen dictionary and applies a separate eligibility mask only to the global
-Level-0 embedding. A mode is ineligible when either its uniform or stationary
-effective support is below `ceil(0.05 * n_fine)`, when a single fine point
-contributes more than 10% of its uniform or stationary energy, or when its
-frequency is unresolved relative to its eigensolver residual. There is no
-fixed minimum-support floor: the threshold scales as exactly five percent of
-the fine population. Resolved low-frequency and bridge-associated modes are
-retained.
-
-For a coarsened eigensystem, the module computes exact fine-point support and
-leverage from membership counts and mass summaries without constructing a
-lifted `n_fine x n_modes` matrix. The recommended diffusion time considers
-eligible modes only and is retained as diagnostic metadata for downstream
-Level-1 construction; it is not applied to Level-0 display coordinates.
-Parsimonious selection uniformly samples microcluster
-representatives and gives each sampled representative equal regression weight,
-independent of its cell count, stationary mass, or sampling probability. With
-a coarse eigensystem, the eigenvector rows are already the microclusters. With
-a full eigensystem, the caller supplies the original point-row indices from
-`GraphCoarseningResult.representatives` as `regression_rows`; nonrepresentative
-fine points never enter the regression kNN. The leave-one-out kNN is rebuilt
-using only those sampled rows. Level-0 coordinates consequently always contain
-one row per microcluster when spectral coarsening is active. Localized modes
-remain available for later clustering-specific embeddings and diagnostics.
-
-`punkst_multires.level0_artifact` publishes those coordinates as row-major
-float32 raw eigenvector columns. Its schema records both the eigensystem row
-used for each displayed point and that microcluster's representative row in
-the original data, along with microcluster sizes, selected modes and
-frequencies, selection diagnostics, and preparation/spectrum fingerprints.
-The visualization starts with the first two selected axes and exposes no
-diffusion-time slider or precomputed time-weighted coordinates.
-
-The production coarse solve requests 80 nontrivial modes. Level-0 selection
-uses only the first 64; the final 16 stabilize the spectral boundary during
-full-data refinement and are never Level-0 candidates.
-
-## Unified raw-affinity resolution selection
-
-`punkst multires-selection` uses the bridge-excluded raw Bhattacharyya graph
-for Level 1 and every later level. There is no diffusion-coordinate navigation
-graph or Level-1 affinity switch. On microclusters, non-bridge affinities and
-internal self-loops are exact sums, so weighted-degree RB Leiden evaluates the
-same objective as the corresponding constrained fine partition.
-
-One increasing-resolution scan supplies all levels. A short scout locates the
-entry to the broad Level-1 range `3 <= C90 <= 10`; the auditable scan then runs
-five converged seeds per resolution, increasing gamma by `sqrt(2)`. Fine-count
-weighted ARI measures both within-resolution seed stability and
-adjacent-resolution persistence. Level 1 prefers the most stable member of a
-stable plateau in its range and explicitly records a fallback otherwise.
-Later levels require a materially distinct stable plateau and at least the
-configured C90 multiple. The default scan stops at C90 500, or at the maximum
-possible singleton C90 for a smaller population.
-
-The selection artifact contains every restart seed, community count, quality,
-convergence result, and pairwise seed ARI, plus adjacent persistence and
-plateau boundaries. Public partition TSVs use the original input identifiers;
-binary row-indexed memberships are internal artifact state.
-
-A minimal request is:
-
-```json
-{
-  "artifact_type": "punkst.multires.selection_request",
-  "schema_version": 1,
-  "source": {
-    "graph_manifest": "graph/manifest.json",
-    "diffusion_manifest": "diffusion/manifest.json"
-  },
-  "scan_population": "auto",
-  "selection": {"min_level": 1, "max_level": 2},
-  "runtime": {"threads": 12}
-}
-```
-
-Run it with `punkst multires-selection --request REQUEST.json --out-dir OUT`.
-`auto` selects microclusters whenever the linked diffusion artifact contains a
-microcluster eigensolve (including a diagnostic `both` solve), and points
-otherwise. Explicit `points` or `microclusters` overrides this rule. Set
-`refinement.full_data_leiden` to true only for a microcluster scan to run one
-initialized, converged full-graph trajectory at each selected resolution.
-
-The main outputs are `partitions/levelN.tsv`, `selected_levels.tsv`, the five
-diagnostic TSVs under `diagnostics/`, and `manifest.json`. The manifest records
-both scan-scale and final full-point community/C90 counts because opt-in
-full-data refinement may change them.
-
-## Representative-first workflow policy
-
-`punkst_multires.workflow.resolve_spectral_workflow` centralizes when the
-pipeline operates on microcluster representatives versus all points. Once
-spectral coarsening activates, the default `full_data_mode="representatives"`
-solves only the coarse eigensystem. Global and higher-level local embeddings
-that use eigenvectors then contain exactly one representative point per
-microcluster.
-
-A direct full-data solve requires `full_data_mode="direct"`. Lifted LOBPCG
-refinement requires `full_data_mode="refine"`; it remains optional and is
-never triggered merely because coarsening occurred. The global embedding
-continues to show representatives, while either explicit full-data mode makes
-point-level eigenvectors available to higher-level local embeddings.
-
-Coarsening is also retained when it is needed only to obtain regression
-representatives. If spectral coarsening does not otherwise activate and the
-point count exceeds the regression sample size, the decision reports an
-explicit regression-only target equal to that sample size. A direct full-data
-eigensystem is then evaluated only at those representatives for parsimonious
-selection. If no downsampling is needed, all points form the regression
-population.
-
-## Resolution-selection workflow policy
-
-`resolve_resolution_selection_workflow` centralizes the population used for
-Leiden resolution scanning and the handling of selected partitions. The
-default `scan_population="auto"` follows the eigensolver mode: a coarse solve
-uses microclusters and a full solve uses points. Explicit `"points"` and
-`"microclusters"` modes override that automatic rule.
-
-After a microcluster scan, the default final point membership is obtained by
-lifting each selected partition with `lift_mode="inherit"`. Explicit
-`classifier-plugin` and `classifier-lrvb` modes use the corresponding
-classifier mapping instead. `run_full_data_leiden=True` is a separate opt-in:
-for every selected resolution, it initializes the fine graph with that lifted
-membership and runs exactly one seeded full-data Leiden trajectory. It never
-reruns or expands the resolution scan. A full-data run is rejected as
-redundant when the scan itself already used all points.
-
-## Optional full-data refinement
-
-`punkst_multires.refinement` lifts the coarse eigenfunctions through the
-fine-to-microcluster membership, converts them to symmetric-operator
-coordinates, and uses them as a block initial guess for SciPy LOBPCG on the
-full embedding operator. The analytical constant vector is constrained out
-and a Jacobi preconditioner is used. The default first attempt performs at
-most eight iterations; it continues up to a total budget of 24 only when the
-64 retained modes do not meet the residual audit. Padding modes remain active
-while any retained mode is unresolved, so they continue to stabilize the
-boundary, but their residuals never keep LOBPCG running after all 64 retained
-modes converge. Retained and padding residual histories are reported
-separately. The thread default is one.
-
-The refinement request is self-contained and records fingerprints of its
-source full and coarse operator artifacts. The result retains 64 modes,
-publishes float64 eigenvalues and diagnostics, and stores the node-major
-point-level eigenfunctions as a memory-mappable float32 array. Residuals and
-mass orthogonality are recomputed from the serialized float32 values before
-atomic publication. The refined dictionary is optional input for higher-level
-visualization and never changes the coarse Level-0 embedding.
-
-Run from a checkout with the designated Python environment:
+Run these commands from the repository root. The output directory must not
+already exist unless `--resume` or the read-only `--resume-plan` is used.
 
 ```bash
-/home/zelig/env/py12/bin/python python/punkst_multires_cli.py diffusion \
-  --graph path/to/knn-graph-artifact \
-  --population microclusters \
-  --out-dir path/to/new-diffusion-artifact
+python3 -m pip install -r python/requirements.txt
 
-/home/zelig/env/py12/bin/python python/punkst_multires_eigensolver.py \
-  --request path/to/request/manifest.json \
-  --output path/to/new-spectrum-directory
+cmake -S . -B test/build \
+  -DPUNKST_RUNTIME_OUTPUT_DIRECTORY=./test/bin
+cmake --build test/build --parallel 4
 
-/home/zelig/env/py12/bin/python python/punkst_multires_refine.py \
-  --request path/to/refinement-request/manifest.json \
-  --output path/to/new-refined-dictionary
+/home/zelig/env/py12/bin/python python/punkst_multires_cli.py build \
+  --theta path/to/theta.tsv \
+  --out-dir path/to/new-multires-output \
+  --punkst test/bin/punkst \
+  --threads 4
 ```
 
-The program prints one JSON status record. Errors are emitted as JSON on
-standard error and leave no partially published output directory.
+The input is a dense tab-separated table. Its first column contains unique
+point identifiers and the remaining columns contain nonnegative factor
+weights. Rows are normalized internally.
 
-## Production orchestration
+During a build, short progress notices are printed to standard error. The
+final machine-readable JSON record remains the only output on standard out.
+A resolution scan prints one line for every evaluated resolution; its
+community count is the mean across that resolution's restart seeds, not a mean
+across resolutions.
+A representative run looks like:
 
-`punkst-multires build` is the production facade over the reusable stages. It
-invokes `punkst knn-graph`, constructs and solves diffusion in Python, exports
-Level-0 axes, then invokes `punkst multires-selection` and `punkst
-multires-scenes`. Native graph and Leiden work use the same `--threads` value
-(defaulting to at most 12); the eigensolver remains independently limited to
-one thread by default.
+```text
+[multires] Built graph: 19,833 points, 410,216 edges.
+[multires] Graph coarsened to 10,000 microclusters (requested 10,000).
+[multires] Constructed diffusion kernel for 19,833 points.
+[multires] Eigensolver succeeded: microclusters: 80 modes, max residual 5.60e-14.
+[multires] Built Level-0 embedding: 10,000 displayed points, 6 axes.
+[multires] Scanned 22 resolutions; community counts follow.
+[multires] Resolution 1/22: gamma=0.048194088, mean communities=3.8 over 5 seeds, mean between-seed ARI=0.959.
+[multires] Resolution 2/22: gamma=0.050327823, mean communities=4.0 over 5 seeds, mean between-seed ARI=0.963.
+...
+[multires] Selected partitions: Level 1: 7 scenes, fallback.
+[multires] Built scenes (Level 1: 7); 314 halo memberships, 0 excluded points.
+[multires] Built scene embeddings for 7 scenes: 7 diffusion, 7 supervised, 7 quartimax-PCA views.
+```
+
+Use `--resume` to validate and reuse every compatible completed stage. Changed
+options invalidate only the earliest affected stage and its dependents. For
+example, changing the Level-1 scene-count bounds keeps the graph, diffusion
+dictionary, and Level-0 embedding, then replaces selection, scenes, and local
+embeddings:
 
 ```bash
 /home/zelig/env/py12/bin/python python/punkst_multires_cli.py build \
-  --theta theta.tsv \
-  --out-dir multires-output \
-  --punkst test/bin_faiss/punkst \
-  --threads 12
+  --theta path/to/theta.tsv \
+  --out-dir path/to/existing-multires-output \
+  --punkst test/bin/punkst \
+  --threads 4 \
+  --resume
 ```
 
-The default is representative-first: native coarsening follows its automatic
-activation policy, diffusion is solved on the exact coarse Galerkin operator,
-and `level0/level0_embedding.tsv` has one raw-point medoid per microcluster.
-Use `--target-microclusters N` to force a target. A direct full eigensolve is
-an explicit `--full-data-mode direct`; add `--level0-population points` to
-export every input identifier. Direct and refine modes use the regression
-sample size as their coarsening target when no explicit target is supplied,
-so parsimonious regression remains based on density-balanced medoids rather
-than a uniform sample of all input rows. `--full-data-mode refine` retains coarse
-Level-0 coordinates and additionally writes an opt-in refined point-level
-dictionary for later local embeddings.
+Preview the decision before anything is changed by replacing `--resume` with
+`--resume-plan`. This is a true dry run: it performs artifact validation and
+prints the reuse/removal/build sets, but does not write, delete, or compute.
 
-`--stop-after level0` emits only the embedding and axis table.
-`--stop-after global-clustering` additionally selects the Level-1 partition
-and constructs only Level-1 scenes. The default `--stop-after scenes` selects
-through Level 2 when a suitable finer partition exists. `--resume` verifies
-the frozen pipeline request and every completed artifact before continuing;
-it never overwrites a mismatched stage.
+For the current annotated mouse-pilot example, use
+`test/multires_vis/cmd_2609a.sh`.
 
-The principal public files are ordinary TSV/JSON:
+## Pipeline walkthrough
 
-- `level0/level0_embedding.tsv`: input IDs (or representative input IDs) and
-  consecutive `axis_0`, `axis_1`, ... coordinates;
-- `level0/level0_axes.tsv`: the dictionary mode and frequency behind each
-  displayed axis;
-- `selection/partitions/levelN.tsv`: hard partitions keyed by input ID;
-- `scenes/scene_memberships.tsv`, `scene_nodes.tsv`, and `scene_edges.tsv`:
-  core/halo assignments and the cross-level scene graph.
+### 1. Metric graph and optional coarsening
 
-The stage-only `punkst-multires level0 --graph ... --diffusion ...` command can
-regenerate the public Level-0 artifact without rebuilding the graph or
-eigensystem. The recommended diffusion time remains diagnostic metadata; the
-exported display coordinates are always unweighted selected eigenvectors.
+The native graph stage filters negligible factors, maps normalized factor
+weights into Hellinger geometry, and constructs a k-nearest-neighbor graph.
+The graph retains disconnected components and adds audited bridge candidates
+for the global diffusion calculation; bridges are excluded from clustering.
+
+The main controls are `--neighbors`, `--knn-backend`, and
+`--factor-weight-threshold`. `auto` chooses a suitable kNN backend. `hnsw` is
+the normal large-data approximate backend, while `flat` and `kdtree` are exact.
+
+Large graphs are compressed into deterministic microclusters. Set
+`--target-microclusters` to request a particular size, or leave it at zero to
+use the activation and target policy. `--coarsening-activation-threshold`
+controls when automatic coarsening starts, and
+`--maximum-microcluster-size` prevents any one representative from covering
+too many input points. Every representative is an actual input point.
+
+Inspect `graph/factors.tsv` to see which input factors were retained.
+When coarsening is active, `graph/coarsening/membership.tsv` maps every input
+identifier to a microcluster and `graph/coarsening/representatives.tsv` names
+the displayed representative of each microcluster. Graph construction and kNN
+audit summaries are in `graph/manifest.json`.
+
+### 2. Diffusion kernel and eigen dictionary
+
+The diffusion stage constructs a self-tuning kernel on the fine graph and,
+when coarsening is active, aggregates it exactly to the microcluster graph. It
+then solves for a reusable dictionary of global modes.
+
+`--full-data-mode representatives` is the scalable default: solve the coarse
+operator and use representative points for Level 0. `direct` solves on every
+point. `refine` solves the coarse problem and then refines the lifted modes on
+the fine operator. The default dictionary has 64 retained modes and 16 padding
+modes. Padding stabilizes the retained spectral boundary but is not offered as
+display output. Native graph work follows `--threads`; the numerical
+eigensolver has its own `--eigensolver-threads` limit.
+
+The stage-only `diffusion` command exposes additional kernel and solver
+parameters. Most builds should use the defaults through `build`.
+
+`diffusion/manifest.json` is the readable summary for this stage. Its
+`populations` entries report the solved population, mode count, maximum
+residual, and solver attempts. The eigenvectors and sparse operators below
+`diffusion/` are internal arrays described by that manifest rather than tables
+intended for direct interpretation.
+
+### 3. Level-0 embedding
+
+Level 0 is the global view. It removes unsuitable global modes and selects a
+small parsimonious subset, exporting unweighted coordinates. By default it
+selects at most six axes from the retained dictionary.
+
+`--level0-population auto` displays representatives when a coarse
+eigensystem is active and points otherwise. Point-level Level 0 requires
+`--full-data-mode direct --level0-population points`.
+`--regression-sample-size` bounds the representative set used to test whether
+a candidate mode adds useful structure, and `--maximum-level0-dimensions`
+caps the displayed axes.
+
+Plot or analyze `level0/level0_embedding.tsv`; its `axis_N` columns are the
+selected global coordinates. Use `level0/level0_axes.tsv` to map each displayed
+axis back to its dictionary mode, frequency, and selection residual.
+
+### 4. Resolution scan and partition selection
+
+The native selector scans increasing Leiden resolutions on the raw affinity
+graph, runs multiple seeded fits, and favors partitions that are stable across
+seeds and neighboring resolutions. `--scan-population auto` scans
+microclusters after a coarse eigensolve and points after a full eigensolve.
+The scan records the first resolution whose mean community count across seeds
+exceeds `--maximum-scan-communities`, then stops; the default ceiling is 300.
+This bounds the finest available candidate partitions without replacing the
+separate C90 safety ceiling.
+
+`--minimum-level` and `--maximum-level` control the number of hierarchy levels
+requested. To impose a hard inclusive range on the number of retained Level-1
+scenes, set both:
+
+```bash
+--minimum-level1-scenes 3 \
+--maximum-level1-scenes 10 \
+--minimum-core-members 200
+```
+
+Only clusters containing at least `--minimum-core-members` fine points count
+toward that range. Both scene bounds default to zero, which disables the hard
+range and preserves the selector's C90-based default. The build fails rather
+than silently returning an out-of-range Level-1 result.
+
+`--partition-lift inherit` assigns each fine point to its microcluster's
+partition. `classifier-plugin` instead trains and audits a point-level
+classifier and falls back to inheritance if the audit fails.
+`--full-data-leiden` optionally runs one initialized fine-graph refinement at
+each selected resolution.
+
+The selected assignment at each level is
+`selection/partitions/levelN.tsv`. `selection/selected_levels.tsv` explains
+which resolution was selected and whether it came from a stable plateau or a
+fallback. The tables in `selection/diagnostics/` expose the complete scan when
+selection behavior needs closer inspection.
+
+### 5. Scenes and hierarchy
+
+Each retained partition cluster becomes a scene core. Smaller clusters remain
+in partition diagnostics but are excluded as scenes. Points can also receive
+halo membership in nearby scenes, and adjacent hierarchy levels are connected
+through overlap-based parent and portal edges. A deeper scene with no valid
+parent in the previous level is attached to the Level-0 root.
+
+The build-level scene control is `--minimum-core-members`. Other halo and DAG
+thresholds currently use the native scene command defaults.
+
+Use `scenes/levels/levelN_assignment.tsv` for one-row-per-point core
+assignments and `scenes/scene_memberships.tsv` when halo memberships are also
+needed. `scenes/scene_nodes.tsv` describes each scene and its major parent;
+`scenes/scene_edges.tsv` describes major, portal, and root-fallback links.
+
+### 6. Per-scene embeddings
+
+Every scene may receive three complementary views:
+
+- selected global diffusion modes at an adaptive scene time;
+- supervised axes that distinguish the scene from its alternatives;
+- quartimax-rotated PCA axes for a simpler loading structure.
+
+`--maximum-scene-dimensions` caps each view. The importance, parsimony,
+effective-rank, regression-neighbor, and fallback options control local mode
+selection and fallback projection. The stage-only `scene-embeddings` command
+exposes the same controls for rebuilding views without rerunning earlier
+stages.
+
+`embeddings/scene_embeddings.tsv` is the compact index of available view
+dimensions. Coordinates and their mode/loading tables are under
+`embeddings/views/diffusion/`, `embeddings/native/views/supervised/`, and
+`embeddings/native/views/quartimax_pca/`. Start from
+`embeddings/manifest.json` when consuming these files programmatically.
+
+### 7. Stopping, resuming, and outputs
+
+`--stop-after` supports:
+
+- `level0`: graph, diffusion dictionary, and global embedding;
+- `global-clustering`: Level 0 plus the Level-1 partition only;
+- `scenes`: selected hierarchy and scene artifacts, without local views;
+- `embeddings`: the complete pipeline; this is the default.
+
+Every stage is written atomically and records fingerprints of its inputs.
+`--resume` first validates every existing artifact, then compares the
+output-affecting request for each stage. Stale directories are removed in
+reverse dependency order and rebuilt only when they are required by the
+current `--stop-after` target. Compatible independent work is retained: a
+Level-0 option change preserves selection and scenes, while a selection option
+change preserves the graph, diffusion dictionary, and Level 0.
+
+`--threads`, `--eigensolver-threads`, and `--punkst` are execution controls,
+not cache keys. Changing them affects newly run work without invalidating
+completed artifacts. A corrupt or manually modified artifact stops resume
+before any files are removed. If a rebuild later fails, the pipeline manifest
+is left as an accurate partial checkpoint and another `--resume` continues
+from it. `--resume-plan` provides the same validation and decision without any
+mutation.
+
+The next section maps the output directory and distinguishes the main
+user-facing tables from internal artifact state.
+
+## Output directory guide
+
+The complete directory has this logical structure. Optional or repeated files
+are marked in the comments; internal raw arrays are abbreviated.
+
+```text
+OUT/
+├── manifest.json                         pipeline index and final status
+├── pipeline_request.json                 most recent build configuration
+├── requests/                             native stage requests
+├── graph/
+│   ├── manifest.json                     graph/coarsening audit summary
+│   ├── factors.tsv                       retained-factor mapping
+│   ├── identifiers.tsv                   canonical input row order
+│   ├── coarsening/
+│   │   ├── membership.tsv                input ID -> microcluster
+│   │   └── representatives.tsv           microcluster -> representative ID
+│   └── ...                               internal graph arrays
+├── diffusion/
+│   ├── manifest.json                     kernel and eigensolver summary
+│   ├── spectrum_points/                  optional point eigen dictionary
+│   ├── spectrum_microclusters/           optional coarse eigen dictionary
+│   └── ...                               internal operator arrays
+├── refined_dictionary/                   optional full-data refined modes
+├── level0/
+│   ├── level0_embedding.tsv              global coordinates
+│   ├── level0_axes.tsv                   displayed axis definitions
+│   ├── level0_alternate_modes.tsv        unselected diagnostic coordinates
+│   └── manifest.json
+├── selection/
+│   ├── selected_levels.tsv               selected resolution summary
+│   ├── partitions/levelN.tsv             input ID -> selected cluster
+│   ├── diagnostics/                      scan/stability diagnostic TSVs
+│   └── manifest.json
+├── scenes/
+│   ├── levels/levelN_assignment.tsv      per-point core assignment
+│   ├── levels/levelN_scenes.tsv          per-scene size/component summary
+│   ├── scene_memberships.tsv             core and halo memberships
+│   ├── scene_nodes.tsv                    scene metadata and major parents
+│   ├── scene_edges.tsv                    hierarchy and portal edges
+│   └── manifest.json
+└── embeddings/
+    ├── scene_embeddings.tsv              available views and dimensions
+    ├── views/diffusion/                   diffusion coordinates and modes
+    ├── native/views/supervised/           supervised coordinates/loadings
+    ├── native/views/quartimax_pca/        rotated PCA coordinates/loadings
+    └── manifest.json
+```
+
+Downstream directories may remain as compatible cached work when a later run
+uses an earlier `--stop-after` target. Stale downstream directories are
+removed even when that invocation stops before rebuilding them.
+`refined_dictionary/` exists only for
+`--full-data-mode refine`. Point and microcluster spectrum directories depend
+on the selected full-data mode.
+
+### Key user-interpretable files
+
+| File | Unit of each row | Interpretation |
+| --- | --- | --- |
+| `manifest.json` | pipeline | Start here for completion status, stage locations, fingerprints, and public output paths. |
+| `pipeline_request.json` | pipeline | Most recent normalized build request. Stage manifests retain the requests that actually produced their artifacts. |
+| `graph/factors.tsv` | input factor | Maps original factor columns to retained factor indices and reports relative weight. |
+| `graph/coarsening/membership.tsv` | input point | Maps each input identifier to its microcluster. Present when coarsening is active. |
+| `graph/coarsening/representatives.tsv` | microcluster | Gives the real input identifier chosen to represent each microcluster. |
+| `diffusion/manifest.json` | solved population | Reports graph population, computed modes, maximum residual, attempts, and source fingerprints. |
+| `level0/level0_embedding.tsv` | displayed point | Global `axis_N` coordinates. In representative mode it also gives microcluster, representative ID, and represented size; in point mode it is keyed directly by input ID. |
+| `level0/level0_axes.tsv` | Level-0 axis | Maps each `axis_N` to its eigenmode, frequency, and parsimonious-selection residual. |
+| `level0/level0_alternate_modes.tsv` | displayed point | Up to 20 eligible but unselected global modes for diagnosis; these are not primary Level-0 axes. |
+| `selection/selected_levels.tsv` | selected level | Resolution, C90, community/retained-scene count, seed stability, plateau, and fallback status. |
+| `selection/partitions/levelN.tsv` | input point | Hard selected cluster label for an input ID. Labels are categorical and local to a level; the same number at two levels does not imply lineage. |
+| `selection/diagnostics/evaluations.tsv` | scanned resolution | Community counts and stability/persistence summaries across the resolution scan. Other files in this directory provide scouts, restarts, pairwise ARI, and plateaus. |
+| `scenes/levels/levelN_assignment.tsv` | input point | Original partition cluster, retained core-scene label (or exclusion), core score, and halo count. |
+| `scenes/levels/levelN_scenes.tsv` | scene | Maps the retained scene label to its source cluster, fine-point count, graph component, and tail flag. |
+| `scenes/scene_memberships.tsv` | point-scene membership | Contains one core row (`core=1`, rank 0) and optional halo rows (`core=0`) with membership score and rank. Points excluded by the core-size filter have no membership row. |
+| `scenes/scene_nodes.tsv` | scene-graph node | Scene size, component, tail/fallback flags, major parent, and split/merge counts. Node 0 is the Level-0 root. |
+| `scenes/scene_edges.tsv` | parent-child link | Overlap and child fraction plus major, portal, and root-fallback flags. Node IDs refer to `scene_nodes.tsv`. |
+| `embeddings/scene_embeddings.tsv` | scene | Compact availability index giving the number of diffusion, supervised, and quartimax-PCA axes. |
+| `embeddings/views/diffusion/levelN_sceneS.coordinates.tsv` | scene member | Local diffusion coordinates plus core/halo metadata. The matching `.modes.tsv` explains mode selection and weighting. |
+| `embeddings/native/views/supervised/levelN_sceneS.{coordinates,axes}.tsv` | scene member or axis loading | Supervised coordinates and factor coefficients. |
+| `embeddings/native/views/quartimax_pca/levelN_sceneS.{coordinates,axes}.tsv` | scene member or axis loading | Quartimax-rotated PCA coordinates and factor coefficients. |
+
+Every stage also contains a `manifest.json` with checksums and array
+descriptors. Files ending in `.i32`, `.f32`, `.f64`, `.u8`, `.bin`, or
+`.float64` are internal, row-indexed artifact storage. Prefer the TSV files
+above for interpretation and use the manifests when a program needs the raw
+arrays.
+
+## Complete `build` option reference
+
+### Inputs and execution
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--theta PATH` | required | Dense input theta TSV. |
+| `--out-dir PATH` | required | New pipeline directory, or an existing pipeline with `--resume`/`--resume-plan`. |
+| `--punkst PATH` | `punkst` | Native executable used for graph, selection, and scene stages. |
+| `--threads N` | min(12, CPU count) | Native graph, clustering, classifier, and scene-projection threads. Must lie in 1–12. |
+| `--seed N` | `260821` | Base deterministic seed shared by stochastic stages. |
+| `--stop-after STAGE` | `embeddings` | Final stage: `level0`, `global-clustering`, `scenes`, or `embeddings`. |
+| `--resume` | off | Validate compatible stages, remove stale dependents, and continue in place. |
+| `--resume-plan` | off | Dry-run resume; report reuse, removal, rebuild, and reasons without changing files. |
+
+### Graph and coarsening
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--neighbors N` | `30` | Directed neighbors used to construct graph support. |
+| `--knn-backend NAME` | `auto` | `auto`, `kdtree`, `flat`, `hnsw`, or `nndescent`. |
+| `--factor-weight-threshold X` | `1e-5` | Remove factors whose mean normalized weight is not greater than this value; nonpositive disables filtering. |
+| `--target-microclusters N` | `0` | Explicit coarsening target; zero uses the native automatic target policy. |
+| `--coarsening-activation-threshold N` | `50000` | Point count above which automatic coarsening activates. |
+| `--maximum-microcluster-size N` | `96` | Maximum fine points represented by one microcluster. |
+
+### Spectral and Level-0 workflow
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--full-data-mode MODE` | `representatives` | Spectral policy: `representatives`, `direct`, or `refine`. |
+| `--level0-population POP` | `auto` | Display `auto`, `representatives`, or `points`. |
+| `--retained-modes N` | `64` | Modes retained in the reusable eigen dictionary. |
+| `--padding-modes N` | `16` | Extra modes used to stabilize the retained spectral boundary. |
+| `--regression-sample-size N` | `5000` | Maximum representatives used for parsimonious mode regression; also supplies a coarsening target in direct/refine mode when no explicit target is given. |
+| `--maximum-level0-dimensions N` | `6` | Maximum selected global display axes. |
+| `--eigensolver-backend NAME` | `scipy` | `scipy`, `primme`, or `scipy-primme`. |
+| `--eigensolver-threads N` | `1` | BLAS/OpenMP thread limit for the eigensolver. |
+| `--refinement-relative-residual-tolerance X` | `1e-6` | Retained-mode residual threshold for `full-data-mode=refine`. |
+| `--refinement-maximum-iterations N` | `24` | Total fine-dictionary refinement iteration budget. |
+
+### Hierarchy and scenes
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--scan-population POP` | `auto` | Resolution-scan population: `auto`, `points`, or `microclusters`. |
+| `--partition-lift MODE` | `inherit` | Fine-point assignment after a microcluster scan: `inherit` or `classifier-plugin`. |
+| `--full-data-leiden` | off | Refine each selected lifted partition once on the full graph. |
+| `--minimum-level N` | `1` | Minimum number of scene hierarchy levels required. |
+| `--maximum-level N` | `2` | Maximum number of scene hierarchy levels selected. |
+| `--minimum-level1-scenes N` | `0` | Hard minimum retained Level-1 scenes; set with the maximum. Zero/zero disables explicit bounds. |
+| `--maximum-level1-scenes N` | `0` | Hard maximum retained Level-1 scenes; set with the minimum. Zero/zero disables explicit bounds. |
+| `--maximum-scan-communities N` | `300` | Stop after recording the first resolution whose mean community count across restart seeds exceeds this threshold. |
+| `--minimum-core-members N` | `200` | Minimum fine-point core size for a partition cluster to become a scene. |
+
+### Per-scene embeddings
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--maximum-scene-dimensions N` | `6` | Maximum axes in each per-scene view. |
+| `--scene-importance-floor X` | `1e-4` | Minimum scene-conditioned global-mode importance. |
+| `--scene-parsimony-threshold X` | `0.5` | Minimum normalized regression residual for admitting another scene diffusion axis. |
+| `--scene-effective-rank X` | `0` | Target rank after adaptive smoothing; zero uses selected scene axes plus two. |
+| `--scene-regression-neighbors N` | `48` | Neighbors used in local parsimonious regression. |
+| `--minimum-clue-members N` | `20` | Minimum labeled members needed for supervised/fallback projection clues. |
+| `--fallback-resolution X` | `1.0` | Leiden resolution used by fallback local projection. |
+
+## Stage-only commands and options
+
+The stage-only commands consume existing artifacts and write a new artifact
+directory. They are useful for experiments and rebuilding downstream output.
+
+### `diffusion`
+
+```bash
+/home/zelig/env/py12/bin/python python/punkst_multires_cli.py diffusion \
+  --graph path/to/graph \
+  --population microclusters \
+  --out-dir path/to/new-diffusion
+```
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--graph PATH` | required | Input kNN graph artifact. |
+| `--population POP` | required | Solve `points`, `microclusters`, or `both`. |
+| `--out-dir PATH` | required | New diffusion artifact directory. |
+| `--bandwidth-rank N` | `0` | Directed-neighbor rank used for local bandwidth; zero uses graph k. |
+| `--bandwidth-minimum-ratio X` | `0.05` | Lower bandwidth clamp relative to the median. |
+| `--bandwidth-maximum-ratio X` | `4.0` | Upper bandwidth clamp relative to the median. |
+| `--alpha X` | `1.0` | Sampling-density normalization exponent. |
+| `--beta X` | `0.0` | Reversible node-mass exponent adjustment. |
+| `--bridge-weight-quantile X` | `0.05` | Ordinary-kernel quantile used as the bridge-weight floor. |
+| `--quantile-sample-size N` | `1000000` | Maximum edges sampled for kernel quantile estimation. |
+| `--coarse-chunk-edges N` | `1000000` | Edge count per spill chunk during coarse aggregation. |
+| `--retained-modes N` | `64` | Dictionary modes retained for downstream use. |
+| `--padding-modes N` | `16` | Additional modes solved for boundary stability. |
+| `--backend NAME` | `scipy` | `scipy`, `primme`, or `scipy-primme`. |
+| `--eigensolver-threads N` | `1` | Eigensolver BLAS/OpenMP thread limit. |
+| `--tolerance X` | `1e-9` | Eigensolver convergence tolerance. |
+| `--maximum-iterations N` | backend default | Maximum solver iterations. |
+| `--seed N` | `260821` | Solver seed. |
+| `--canonicalization-seed N` | `0` | Seed for deterministic hash probes used to orient repeated eigenspaces. |
+
+### `level0`
+
+```bash
+/home/zelig/env/py12/bin/python python/punkst_multires_cli.py level0 \
+  --graph path/to/graph \
+  --diffusion path/to/diffusion \
+  --out-dir path/to/new-level0
+```
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--graph PATH` | required | Input kNN graph artifact. |
+| `--diffusion PATH` | required | Input diffusion artifact. |
+| `--out-dir PATH` | required | New Level-0 artifact directory. |
+| `--spectrum-population POP` | `auto` | Dictionary source: `auto`, `points`, or `microclusters`. |
+| `--display-population POP` | `auto` | Output population: `auto`, `representatives`, or `points`. |
+| `--retained-modes N` | `64` | Number of dictionary modes eligible for selection. |
+| `--maximum-dimensions N` | `6` | Maximum exported Level-0 axes. |
+| `--regression-sample-size N` | `5000` | Maximum rows used for parsimonious regression. |
+| `--seed N` | `260821` | Regression sampling seed. |
+
+### `scene-embeddings`
+
+```bash
+/home/zelig/env/py12/bin/python python/punkst_multires_cli.py \
+  scene-embeddings \
+  --graph path/to/graph \
+  --diffusion path/to/diffusion \
+  --level0 path/to/level0 \
+  --scenes path/to/scenes \
+  --out-dir path/to/new-scene-embeddings
+```
+
+| Option | Default | What it controls |
+| --- | --- | --- |
+| `--graph PATH` | required | Input kNN graph artifact. |
+| `--diffusion PATH` | required | Input diffusion artifact. |
+| `--level0 PATH` | required | Input Level-0 artifact. |
+| `--scenes PATH` | required | Input scene artifact. |
+| `--refined-dictionary PATH` | none | Optional refined fine-point dictionary. |
+| `--out-dir PATH` | required | New scene-embedding artifact directory. |
+| `--punkst PATH` | `punkst` | Native executable used for scene projection. |
+| `--maximum-dimensions N` | `6` | Maximum axes per view. |
+| `--retained-modes N` | `0` | Dictionary modes considered; zero uses the diffusion artifact's retained count. |
+| `--importance-floor X` | `1e-4` | Minimum scene-conditioned mode importance. |
+| `--parsimony-threshold X` | `0.5` | Minimum normalized regression residual for another diffusion axis. |
+| `--effective-rank X` | `0` | Adaptive smoothing target; zero uses dimensions plus two. |
+| `--regression-sample-size N` | `5000` | Maximum scene rows used for regression. |
+| `--regression-neighbors N` | `48` | Neighbors used in parsimonious regression. |
+| `--minimum-clue-members N` | `20` | Minimum labeled clues for supervised/fallback projection. |
+| `--fallback-resolution X` | `1.0` | Leiden resolution for fallback projection. |
+| `--threads N` | min(12, CPU count) | Native projection worker threads. |
+| `--seed N` | `260821` | Scene selection and fallback seed. |
+
+Use `python/punkst_multires_cli.py COMMAND --help` as the authoritative parser
+reference.
+
+## Diagnostic HTML reports
+
+The temporary Plotly reports are checkout-local modules, not installed Python
+packages. Add the repository's `python/` directory to `PYTHONPATH` before
+running them:
+
+```bash
+export PYTHONPATH="$PWD/python${PYTHONPATH:+:$PYTHONPATH}"
+
+/home/zelig/env/py12/bin/python \
+  -m multires_diagnostics.build_multires_level0_html --help
+
+/home/zelig/env/py12/bin/python \
+  -m multires_diagnostics.build_multires_scene_html --help
+```
+
+The reports load Plotly from its CDN and embed the remaining data in one HTML
+file. They are development diagnostics, not the planned scalable frontend.

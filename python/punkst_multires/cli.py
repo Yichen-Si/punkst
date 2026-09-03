@@ -12,7 +12,13 @@ from .diffusion import KernelOptions, run_diffusion
 from .eigensolver import SolverOptions
 from .artifacts import read_manifest
 from .mode_selection import Level0SelectionOptions
-from .pipeline import BuildOptions, build_level0_artifact, run_build
+from .pipeline import (
+    BuildOptions,
+    build_level0_artifact,
+    plan_build_resume,
+    run_build,
+)
+from .scene_embeddings import SceneEmbeddingOptions, write_scene_embeddings
 
 
 def _diffusion_parser(subparsers: argparse._SubParsersAction) -> None:
@@ -100,11 +106,32 @@ def _build_parser(subparsers: argparse._SubParsersAction) -> None:
     parser.add_argument("--full-data-leiden", action="store_true")
     parser.add_argument("--minimum-level", type=int, default=1)
     parser.add_argument("--maximum-level", type=int, default=2)
+    parser.add_argument(
+        "--minimum-level1-scenes", type=int, default=0,
+        help=("hard lower bound on retained Level-1 scenes; use together "
+              "with --maximum-level1-scenes (both default to 0: disabled)"))
+    parser.add_argument(
+        "--maximum-level1-scenes", type=int, default=0,
+        help=("hard upper bound on retained Level-1 scenes; use together "
+              "with --minimum-level1-scenes (both default to 0: disabled)"))
+    parser.add_argument(
+        "--maximum-scan-communities", type=int, default=300,
+        help=("stop after the first scanned resolution whose mean community "
+              "count across restart seeds exceeds this value"))
     parser.add_argument("--minimum-core-members", type=int, default=200)
     parser.add_argument("--retained-modes", type=int, default=64)
     parser.add_argument("--padding-modes", type=int, default=16)
     parser.add_argument("--regression-sample-size", type=int, default=5000)
     parser.add_argument("--maximum-level0-dimensions", type=int, default=6)
+    parser.add_argument("--maximum-scene-dimensions", type=int, default=6)
+    parser.add_argument("--scene-importance-floor", type=float, default=1e-4)
+    parser.add_argument("--scene-parsimony-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--scene-effective-rank", type=float, default=0.0,
+        help="target after adaptive scene smoothing; 0 uses scene axes + 2")
+    parser.add_argument("--scene-regression-neighbors", type=int, default=48)
+    parser.add_argument("--minimum-clue-members", type=int, default=20)
+    parser.add_argument("--fallback-resolution", type=float, default=1.0)
     parser.add_argument("--eigensolver-backend",
                         choices=("scipy", "primme", "scipy-primme"),
                         default="scipy")
@@ -115,10 +142,47 @@ def _build_parser(subparsers: argparse._SubParsersAction) -> None:
                         default=24)
     parser.add_argument("--seed", type=int, default=260821)
     parser.add_argument("--stop-after",
-                        choices=("level0", "global-clustering", "scenes"),
-                        default="scenes")
-    parser.add_argument("--resume", action="store_true")
+                        choices=("level0", "global-clustering", "scenes",
+                                 "embeddings"),
+                        default="embeddings")
+    resume = parser.add_mutually_exclusive_group()
+    resume.add_argument(
+        "--resume", action="store_true",
+        help="reuse compatible stages and replace stale dependents")
+    resume.add_argument(
+        "--resume-plan", action="store_true",
+        help="dry-run --resume without writing, deleting, or computing")
     parser.set_defaults(handler=_run_build)
+
+
+def _scene_embeddings_parser(
+        subparsers: argparse._SubParsersAction) -> None:
+    parser = subparsers.add_parser(
+        "scene-embeddings",
+        help="Build diffusion, supervised, and quartimax-rotated PCA views for scenes")
+    parser.add_argument("--graph", type=Path, required=True)
+    parser.add_argument("--diffusion", type=Path, required=True)
+    parser.add_argument("--level0", type=Path, required=True)
+    parser.add_argument("--scenes", type=Path, required=True)
+    parser.add_argument("--refined-dictionary", type=Path)
+    parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--punkst", default="punkst")
+    parser.add_argument("--maximum-dimensions", type=int, default=6)
+    parser.add_argument("--retained-modes", type=int, default=0,
+                        help="0 uses the diffusion retained-mode count")
+    parser.add_argument("--importance-floor", type=float, default=1e-4)
+    parser.add_argument("--parsimony-threshold", type=float, default=0.5)
+    parser.add_argument(
+        "--effective-rank", type=float, default=0.0,
+        help="target after adaptive scene smoothing; 0 uses dimensions + 2")
+    parser.add_argument("--regression-sample-size", type=int, default=5000)
+    parser.add_argument("--regression-neighbors", type=int, default=48)
+    parser.add_argument("--minimum-clue-members", type=int, default=20)
+    parser.add_argument("--fallback-resolution", type=float, default=1.0)
+    parser.add_argument("--threads", type=int,
+                        default=min(12, os.cpu_count() or 1))
+    parser.add_argument("--seed", type=int, default=260821)
+    parser.set_defaults(handler=_run_scene_embeddings)
 
 
 def make_parser() -> argparse.ArgumentParser:
@@ -126,6 +190,7 @@ def make_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     _diffusion_parser(subparsers)
     _level0_parser(subparsers)
+    _scene_embeddings_parser(subparsers)
     _build_parser(subparsers)
     return parser
 
@@ -181,6 +246,29 @@ def _run_level0(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _run_scene_embeddings(args: argparse.Namespace) -> dict[str, object]:
+    manifest_path = write_scene_embeddings(
+        args.graph, args.diffusion, args.level0, args.scenes, args.out_dir,
+        punkst=args.punkst, refined_path=args.refined_dictionary,
+        options=SceneEmbeddingOptions(
+            maximum_dimensions=args.maximum_dimensions,
+            retained_modes=args.retained_modes,
+            importance_floor=args.importance_floor,
+            parsimony_threshold=args.parsimony_threshold,
+            effective_rank=args.effective_rank,
+            regression_sample_size=args.regression_sample_size,
+            regression_neighbors=args.regression_neighbors,
+            minimum_clue_members=args.minimum_clue_members,
+            fallback_resolution=args.fallback_resolution,
+            threads=args.threads, seed=args.seed))
+    manifest = read_manifest(manifest_path)
+    return {
+        "status": "ok", "manifest": str(manifest_path),
+        "fingerprint": manifest["fingerprint"],
+        **manifest["summary"],
+    }
+
+
 def _run_build(args: argparse.Namespace) -> dict[str, object]:
     options = BuildOptions(
         theta_path=args.theta, output=args.out_dir, punkst=args.punkst,
@@ -197,24 +285,51 @@ def _run_build(args: argparse.Namespace) -> dict[str, object]:
         full_data_leiden=args.full_data_leiden,
         minimum_level=args.minimum_level,
         maximum_level=args.maximum_level,
+        minimum_level1_scenes=args.minimum_level1_scenes,
+        maximum_level1_scenes=args.maximum_level1_scenes,
+        maximum_scan_communities=args.maximum_scan_communities,
         minimum_core_members=args.minimum_core_members,
         retained_modes=args.retained_modes,
         padding_modes=args.padding_modes,
         regression_sample_size=args.regression_sample_size,
         maximum_level0_dimensions=args.maximum_level0_dimensions,
+        maximum_scene_dimensions=args.maximum_scene_dimensions,
+        scene_importance_floor=args.scene_importance_floor,
+        scene_parsimony_threshold=args.scene_parsimony_threshold,
+        scene_effective_rank=args.scene_effective_rank,
+        scene_regression_neighbors=args.scene_regression_neighbors,
+        minimum_clue_members=args.minimum_clue_members,
+        fallback_resolution=args.fallback_resolution,
         eigensolver_backend=args.eigensolver_backend,
         eigensolver_threads=args.eigensolver_threads,
         refinement_relative_residual_tolerance=
             args.refinement_relative_residual_tolerance,
         refinement_maximum_iterations=args.refinement_maximum_iterations,
         seed=args.seed)
+    if args.resume_plan:
+        plan = plan_build_resume(options, stop_after=args.stop_after)
+        for label, stages in (
+                ("reuse", plan.reuse),
+                ("remove", plan.remove),
+                ("build", plan.build)):
+            names = ", ".join(stages) if stages else "none"
+            print(f"[multires] Resume plan: {label} {names}.",
+                  file=sys.stderr, flush=True)
+        for stage in plan.remove:
+            print(f"[multires] Invalidating {stage}: "
+                  f"{plan.reasons[stage]}.", file=sys.stderr, flush=True)
+        return {"status": "ok", **plan.as_dict()}
     manifest_path = run_build(
-        options, stop_after=args.stop_after, resume=args.resume)
+        options, stop_after=args.stop_after, resume=args.resume,
+        status_callback=lambda message: print(
+            f"[multires] {message}", file=sys.stderr, flush=True))
     manifest = read_manifest(manifest_path)
     return {
         "status": "ok", "manifest": str(manifest_path),
         "fingerprint": manifest["fingerprint"],
-        "completed_through": args.stop_after,
+        "completed_through": manifest.get(
+            "available_through", args.stop_after),
+        "requested_stop_after": args.stop_after,
         "level0_embedding": manifest["public_outputs"]["level0_embedding"],
         "stages": manifest["stages"],
     }

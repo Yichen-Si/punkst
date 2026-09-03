@@ -13,31 +13,6 @@ namespace {
 using punkst::multires::json;
 namespace fs = std::filesystem;
 
-const json& object_field(const json& parent, const char* name) {
-    const auto found = parent.find(name);
-    if (found == parent.end() || !found->is_object()) {
-        throw std::invalid_argument(std::string(name) + " must be a JSON object");
-    }
-    return *found;
-}
-
-void reject_unknown(const json& value,
-        const std::set<std::string>& known, const std::string& context) {
-    for (const auto& item : value.items()) {
-        if (!known.count(item.key())) {
-            throw std::invalid_argument(
-                "Unknown " + context + " key: " + item.key());
-        }
-    }
-}
-
-fs::path resolve_path(const fs::path& request_path,
-        const std::string& value) {
-    fs::path output(value);
-    if (output.is_relative()) output = request_path.parent_path() / output;
-    return fs::absolute(output).lexically_normal();
-}
-
 struct ParsedRequest {
     punkst::multires::SelectionArtifactOptions options;
     json resolved;
@@ -45,7 +20,7 @@ struct ParsedRequest {
 
 ParsedRequest parse_request(const fs::path& request_path,
         const json& request) {
-    reject_unknown(request, {"artifact_type", "schema_version", "source",
+    punkst::multires::reject_unknown_keys(request, {"artifact_type", "schema_version", "source",
         "scan_population", "selection", "refinement", "runtime"},
         "request");
     if (request.value("artifact_type", "")
@@ -55,17 +30,17 @@ ParsedRequest parse_request(const fs::path& request_path,
             "Expected punkst.multires.selection_request schema version 1");
     }
     ParsedRequest out;
-    const json& source = object_field(request, "source");
-    reject_unknown(source, {"graph_manifest", "diffusion_manifest"},
+    const json& source = punkst::multires::require_object_field(request, "source");
+    punkst::multires::reject_unknown_keys(source, {"graph_manifest", "diffusion_manifest"},
         "source");
     if (!source.contains("graph_manifest")) {
         throw std::invalid_argument("source.graph_manifest is required");
     }
-    out.options.graph_manifest = resolve_path(
+    out.options.graph_manifest = punkst::multires::resolve_request_path(
         request_path, source.at("graph_manifest").get<std::string>());
     if (source.contains("diffusion_manifest")
             && !source.at("diffusion_manifest").is_null()) {
-        out.options.diffusion_manifest = resolve_path(request_path,
+        out.options.diffusion_manifest = punkst::multires::resolve_request_path(request_path,
             source.at("diffusion_manifest").get<std::string>());
     }
     out.options.scan_population = punkst::multires::parse_scan_population(
@@ -73,12 +48,15 @@ ParsedRequest parse_request(const fs::path& request_path,
 
     auto& selection = out.options.selection;
     if (request.contains("selection")) {
-        const json& value = object_field(request, "selection");
-        reject_unknown(value, {"level1_c90_minimum", "level1_c90_maximum",
+        const json& value = punkst::multires::require_object_field(request, "selection");
+        punkst::multires::reject_unknown_keys(value, {"level1_c90_minimum", "level1_c90_maximum",
+            "level1_scene_count_minimum", "level1_scene_count_maximum",
+            "minimum_scene_core_members",
             "min_level", "max_level",
             "next_level_c90_multiplier", "fallback_c90_max_multiplier",
             "scout_max_iterations", "maximum_scout_steps",
             "maximum_midpoints", "restarts", "stop_c90",
+            "maximum_scan_communities",
             "maximum_scan_steps", "initial_resolution",
             "scout_resolution_factor", "scan_resolution_factor",
             "seed_stability_threshold", "persistence_threshold",
@@ -88,6 +66,15 @@ ParsedRequest parse_request(const fs::path& request_path,
             "level1_c90_minimum", selection.level1_c90_minimum);
         selection.level1_c90_maximum = value.value(
             "level1_c90_maximum", selection.level1_c90_maximum);
+        selection.level1_scene_count_minimum = value.value(
+            "level1_scene_count_minimum",
+            selection.level1_scene_count_minimum);
+        selection.level1_scene_count_maximum = value.value(
+            "level1_scene_count_maximum",
+            selection.level1_scene_count_maximum);
+        selection.minimum_scene_core_members = value.value(
+            "minimum_scene_core_members",
+            selection.minimum_scene_core_members);
         selection.minimum_levels = value.value(
             "min_level", selection.minimum_levels);
         selection.maximum_levels = value.value(
@@ -107,6 +94,9 @@ ParsedRequest parse_request(const fs::path& request_path,
         selection.final_restarts = value.value(
             "restarts", selection.final_restarts);
         selection.stop_c90 = value.value("stop_c90", selection.stop_c90);
+        selection.maximum_scan_communities = value.value(
+            "maximum_scan_communities",
+            selection.maximum_scan_communities);
         selection.maximum_scan_steps = value.value(
             "maximum_scan_steps", selection.maximum_scan_steps);
         selection.initial_resolution = value.value(
@@ -127,8 +117,8 @@ ParsedRequest parse_request(const fs::path& request_path,
         selection.seed = value.value("seed", selection.seed);
     }
     if (request.contains("refinement")) {
-        const json& refinement = object_field(request, "refinement");
-        reject_unknown(refinement, {"full_data_leiden", "seed"},
+        const json& refinement = punkst::multires::require_object_field(request, "refinement");
+        punkst::multires::reject_unknown_keys(refinement, {"full_data_leiden", "seed"},
             "refinement");
         out.options.refine_on_full_graph = refinement.value(
             "full_data_leiden", false);
@@ -136,8 +126,8 @@ ParsedRequest parse_request(const fs::path& request_path,
     }
     int32_t threads = 1;
     if (request.contains("runtime")) {
-        const json& runtime = object_field(request, "runtime");
-        reject_unknown(runtime, {"threads"}, "runtime");
+        const json& runtime = punkst::multires::require_object_field(request, "runtime");
+        punkst::multires::reject_unknown_keys(runtime, {"threads"}, "runtime");
         threads = runtime.value("threads", 1);
     }
     if (threads <= 0) {
@@ -158,6 +148,12 @@ ParsedRequest parse_request(const fs::path& request_path,
         {"selection", {
             {"level1_c90_minimum", selection.level1_c90_minimum},
             {"level1_c90_maximum", selection.level1_c90_maximum},
+            {"level1_scene_count_minimum",
+                selection.level1_scene_count_minimum},
+            {"level1_scene_count_maximum",
+                selection.level1_scene_count_maximum},
+            {"minimum_scene_core_members",
+                selection.minimum_scene_core_members},
             {"min_level", selection.minimum_levels},
             {"max_level", selection.maximum_levels},
             {"next_level_c90_multiplier",
@@ -169,6 +165,8 @@ ParsedRequest parse_request(const fs::path& request_path,
             {"maximum_midpoints", selection.maximum_midpoints},
             {"restarts", selection.final_restarts},
             {"stop_c90", selection.stop_c90},
+            {"maximum_scan_communities",
+                selection.maximum_scan_communities},
             {"maximum_scan_steps", selection.maximum_scan_steps},
             {"initial_resolution", selection.initial_resolution},
             {"scout_resolution_factor",

@@ -13,31 +13,6 @@ namespace {
 using punkst::multires::json;
 namespace fs = std::filesystem;
 
-const json& object_field(const json& parent, const char* name) {
-    const auto found = parent.find(name);
-    if (found == parent.end() || !found->is_object()) {
-        throw std::invalid_argument(std::string(name) + " must be a JSON object");
-    }
-    return *found;
-}
-
-void reject_unknown(const json& value,
-        const std::set<std::string>& known, const std::string& context) {
-    for (const auto& item : value.items()) {
-        if (!known.count(item.key())) {
-            throw std::invalid_argument(
-                "Unknown " + context + " key: " + item.key());
-        }
-    }
-}
-
-fs::path resolve_path(const fs::path& request_path,
-        const std::string& value) {
-    fs::path output(value);
-    if (output.is_relative()) output = request_path.parent_path() / output;
-    return fs::absolute(output).lexically_normal();
-}
-
 SceneCoreMode parse_core_mode(const std::string& value) {
     if (value == "inherit") return SceneCoreMode::Inherit;
     if (value == "classifier-plugin") return SceneCoreMode::ClassifierPlugin;
@@ -53,7 +28,7 @@ struct ParsedRequest {
 
 ParsedRequest parse_request(const fs::path& request_path,
         const json& request) {
-    reject_unknown(request, {"artifact_type", "schema_version", "source",
+    punkst::multires::reject_unknown_keys(request, {"artifact_type", "schema_version", "source",
         "core_mode", "scenes", "classifier", "runtime"}, "request");
     if (request.value("artifact_type", "")
             != "punkst.multires.scenes_request"
@@ -62,25 +37,25 @@ ParsedRequest parse_request(const fs::path& request_path,
             "Expected punkst.multires.scenes_request schema version 1");
     }
     ParsedRequest out;
-    const json& source = object_field(request, "source");
-    reject_unknown(source, {"graph_manifest", "selection_manifest"},
+    const json& source = punkst::multires::require_object_field(request, "source");
+    punkst::multires::reject_unknown_keys(source, {"graph_manifest", "selection_manifest"},
         "source");
     if (!source.contains("graph_manifest")
             || !source.contains("selection_manifest")) {
         throw std::invalid_argument(
             "source.graph_manifest and source.selection_manifest are required");
     }
-    out.options.graph_manifest = resolve_path(request_path,
+    out.options.graph_manifest = punkst::multires::resolve_request_path(request_path,
         source.at("graph_manifest").get<std::string>());
-    out.options.selection_manifest = resolve_path(request_path,
+    out.options.selection_manifest = punkst::multires::resolve_request_path(request_path,
         source.at("selection_manifest").get<std::string>());
     out.options.core_mode = parse_core_mode(
         request.value("core_mode", std::string("inherit")));
 
     auto& scenes = out.options.scenes;
     if (request.contains("scenes")) {
-        const json& value = object_field(request, "scenes");
-        reject_unknown(value, {"minimum_core_members", "halo_minimum_score",
+        const json& value = punkst::multires::require_object_field(request, "scenes");
+        punkst::multires::reject_unknown_keys(value, {"minimum_core_members", "halo_minimum_score",
             "halo_relative_to_core", "maximum_halo_scenes",
             "portal_minimum_child_fraction"}, "scenes");
         scenes.minimum_scene_core_members = value.value(
@@ -98,8 +73,8 @@ ParsedRequest parse_request(const fs::path& request_path,
 
     auto& classifier = out.options.classifier;
     if (request.contains("classifier")) {
-        const json& value = object_field(request, "classifier");
-        reject_unknown(value, {"minimum_crossfit_ari",
+        const json& value = punkst::multires::require_object_field(request, "classifier");
+        punkst::multires::reject_unknown_keys(value, {"minimum_crossfit_ari",
             "minimum_scene_recall", "minimum_representatives_per_scene",
             "seed", "folds", "maximum_iterations", "lbfgs_history",
             "quadratic_rank", "gradient_tolerance"}, "classifier");
@@ -123,8 +98,8 @@ ParsedRequest parse_request(const fs::path& request_path,
     }
     int32_t threads = 1;
     if (request.contains("runtime")) {
-        const json& runtime = object_field(request, "runtime");
-        reject_unknown(runtime, {"threads"}, "runtime");
+        const json& runtime = punkst::multires::require_object_field(request, "runtime");
+        punkst::multires::reject_unknown_keys(runtime, {"threads"}, "runtime");
         threads = runtime.value("threads", 1);
     }
     if (threads <= 0) {
