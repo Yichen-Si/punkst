@@ -121,6 +121,36 @@ std::vector<int32_t> core_local_rows(
     return output;
 }
 
+std::vector<SceneHaloMembership> select_members(
+        const std::vector<SceneHaloMembership>& members,
+        const std::vector<int32_t>& rows) {
+    std::vector<SceneHaloMembership> output;
+    output.reserve(rows.size());
+    for (const int32_t row : rows) {
+        if (row < 0 || row >= static_cast<int32_t>(members.size())) {
+            throw std::invalid_argument(
+                "Scene projection row is outside the membership range");
+        }
+        output.push_back(members[static_cast<size_t>(row)]);
+    }
+    return output;
+}
+
+RowMajorMatrixXd select_scene_rows(
+        const RowMajorMatrixXd& values,
+        const std::vector<int32_t>& rows) {
+    RowMajorMatrixXd output(rows.size(), values.cols());
+    for (size_t target = 0; target < rows.size(); ++target) {
+        const int32_t source = rows[target];
+        if (source < 0 || source >= values.rows()) {
+            throw std::invalid_argument(
+                "Scene projection row is outside the value range");
+        }
+        output.row(static_cast<Eigen::Index>(target)) = values.row(source);
+    }
+    return output;
+}
+
 CluePartition retained_partition(
         const std::vector<int32_t>& labels,
         const std::vector<int32_t>& core_rows,
@@ -239,6 +269,11 @@ ViewFile write_view(const fs::path& root, const std::string& view,
         const std::vector<std::string>& identifiers,
         const std::vector<std::string>& factor_names,
         const SceneProjectionView& fitted) {
+    if (fitted.coordinates.rows()
+            != static_cast<Eigen::Index>(members.size())) {
+        throw std::invalid_argument(
+            "Scene projection coordinates and members do not align");
+    }
     const std::string stem = "level" + std::to_string(level)
         + "_scene" + std::to_string(scene);
     const fs::path directory = root / "views" / view;
@@ -363,6 +398,7 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
         std::ofstream index(index_path);
         index << "node\tlevel\tscene\tmembers\tcore_members\tclue_source"
                  "\tclue_groups\tclue_fit_rows\texcluded_clue_rows"
+                 "\tprojected_members\texcluded_zero_factor_mass_members"
                  "\tsupervised_dimensions\tquartimax_pca_dimensions\n";
         json records = json::array();
         for (size_t level_index = 0;
@@ -381,24 +417,47 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
                     throw std::runtime_error("Scene has no members or core");
                 }
                 const RowMajorMatrixXd values = scene_values(theta, members);
-                CluePartition clues = child_clues(members, core_rows, children,
-                    options.minimum_clue_members);
-                if (clues.groups < 2) {
-                    clues = fallback_clues(values, core_rows, options, node);
-                    if (clues.fallback_attempted) {
-                        ++summary.fallback_leiden_runs;
-                    }
-                }
-
                 ViewFile supervised;
                 ViewFile quartimax_pca;
                 std::optional<SceneComposition> composition;
+                std::vector<SceneHaloMembership> projected_members;
+                std::vector<int32_t> projected_core_rows;
                 try {
                     composition = prepare_scene_composition(values,
                         theta.factor_names, core_rows, options.projection);
+                    projected_members = select_members(
+                        members, composition->projected_rows);
+                    projected_core_rows = core_local_rows(projected_members);
                 } catch (const std::exception& error) {
+                    composition.reset();
+                    projected_members.clear();
+                    projected_core_rows.clear();
                     supervised.omitted_reason = error.what();
                     quartimax_pca.omitted_reason = error.what();
+                }
+
+                const auto& clue_members = composition.has_value()
+                    ? projected_members : members;
+                const auto& clue_core_rows = composition.has_value()
+                    ? projected_core_rows : core_rows;
+                CluePartition clues = child_clues(clue_members,
+                    clue_core_rows, children, options.minimum_clue_members);
+                if (clues.groups < 2) {
+                    if (composition.has_value()
+                            && composition->projected_rows.size()
+                                != members.size()) {
+                        const RowMajorMatrixXd projected_values =
+                            select_scene_rows(values,
+                                composition->projected_rows);
+                        clues = fallback_clues(projected_values,
+                            projected_core_rows, options, node);
+                    } else {
+                        clues = fallback_clues(values, clue_core_rows,
+                            options, node);
+                    }
+                    if (clues.fallback_attempted) {
+                        ++summary.fallback_leiden_runs;
+                    }
                 }
                 if (composition.has_value()) {
                     if (clues.groups >= 2) {
@@ -408,7 +467,7 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
                                     clues.core_rows, clues.assignments,
                                     clues.groups, options.projection);
                             supervised = write_view(root, "supervised",
-                                level.metadata.level, scene, members,
+                                level.metadata.level, scene, projected_members,
                                 theta.identifiers, theta.factor_names, fitted);
                             ++summary.supervised_views;
                         } catch (const std::exception& error) {
@@ -420,9 +479,10 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
                     }
                     try {
                         const SceneProjectionView fitted = fit_scene_quartimax_pca(
-                            *composition, core_rows, options.projection);
+                            *composition, projected_core_rows,
+                            options.projection);
                         quartimax_pca = write_view(root, "quartimax_pca",
-                            level.metadata.level, scene, members,
+                            level.metadata.level, scene, projected_members,
                             theta.identifiers, theta.factor_names, fitted);
                         ++summary.quartimax_pca_views;
                     } catch (const std::exception& error) {
@@ -433,7 +493,12 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
                     << '\t' << members.size() << '\t' << core_rows.size()
                     << '\t' << clues.source << '\t' << clues.groups
                     << '\t' << clues.core_rows.size() << '\t'
-                    << clues.excluded_rows << '\t' << supervised.dimensions
+                    << clues.excluded_rows << '\t'
+                    << (composition.has_value()
+                        ? projected_members.size() : 0) << '\t'
+                    << (composition.has_value()
+                        ? members.size() - projected_members.size() : 0)
+                    << '\t' << supervised.dimensions
                     << '\t' << quartimax_pca.dimensions << '\n';
                 records.push_back({
                     {"node", node}, {"level", level.metadata.level},
@@ -446,7 +511,12 @@ SceneProjectionArtifactSummary write_scene_projection_artifact(
                         {"retained_core_mass_proportion",
                             composition->retained_core_mass_proportion},
                         {"minimum_factors_restored",
-                            composition->minimum_factors_restored}
+                            composition->minimum_factors_restored},
+                        {"projected_members", projected_members.size()},
+                        {"excluded_zero_factor_mass_members",
+                            members.size() - projected_members.size()},
+                        {"excluded_zero_factor_mass_core_members",
+                            core_rows.size() - projected_core_rows.size()}
                     } : json(nullptr)},
                     {"clues", {
                         {"source", clues.source}, {"groups", clues.groups},

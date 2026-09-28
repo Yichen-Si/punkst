@@ -16,12 +16,16 @@ struct SceneProjectionOptions {
     int32_t n_threads = 1;
     double covariance_floor = 1e-5;
     double minimum_cover_mass = 0.997;
-    double minimum_factor_mass = 1e-6;
+    // Minimum fraction of total scene-core theta mass for one factor.
+    double minimum_factor_mass = 0.005;
     int32_t minimum_factors = 3;
 };
 
 struct SceneComposition {
     int32_t input_factors = 0;
+    // Input-scene row indices represented by linear.coordinates. Rows with
+    // zero mass over all locally retained factors are omitted.
+    std::vector<int32_t> projected_rows;
     std::vector<int32_t> retained_factors;
     std::vector<std::string> retained_factor_names;
     linear_embedding::ProjectionData linear;
@@ -46,6 +50,8 @@ void validate_scene_projection_options(
 
 // values contains every output member of one scene. core_rows are local row
 // indices and are the only rows allowed to influence factor selection or fits.
+// Members with no mass over the selected factor subspace are omitted from
+// SceneComposition::linear and listed implicitly by projected_rows.
 SceneComposition prepare_scene_composition(
     const Eigen::Ref<const RowMajorMatrixXd>& values,
     const std::vector<std::string>& factor_names,

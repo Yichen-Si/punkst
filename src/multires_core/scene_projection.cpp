@@ -77,6 +77,7 @@ void validate_scene_projection_options(
             || options.minimum_cover_mass > 1.0
             || !std::isfinite(options.minimum_cover_mass)
             || options.minimum_factor_mass < 0.0
+            || options.minimum_factor_mass > 1.0
             || !std::isfinite(options.minimum_factor_mass)
             || options.minimum_factors < 2) {
         throw std::invalid_argument("Invalid scene projection options");
@@ -99,8 +100,6 @@ SceneComposition prepare_scene_composition(
         values, core_rows, options.minimum_cover_mass,
         options.minimum_factor_mass, options.minimum_factors, true);
 
-    RowMajorMatrixXd retained(values.rows(),
-        static_cast<Eigen::Index>(selection.retained_indices.size()));
     SceneComposition output;
     output.input_factors = static_cast<int32_t>(values.cols());
     output.retained_factors = selection.retained_indices;
@@ -108,9 +107,35 @@ SceneComposition prepare_scene_composition(
     for (size_t target = 0;
             target < selection.retained_indices.size(); ++target) {
         const int32_t source = selection.retained_indices[target];
-        retained.col(static_cast<Eigen::Index>(target)) = values.col(source);
         output.retained_factor_names.push_back(
             factor_names[static_cast<size_t>(source)]);
+    }
+    output.projected_rows.reserve(static_cast<size_t>(values.rows()));
+    for (Eigen::Index row = 0; row < values.rows(); ++row) {
+        double maximum = 0.0;
+        for (const int32_t factor : selection.retained_indices) {
+            maximum = std::max(maximum, values(row, factor));
+        }
+        if (maximum > 0.0) {
+            output.projected_rows.push_back(static_cast<int32_t>(row));
+        }
+    }
+    if (output.projected_rows.empty()) {
+        throw std::runtime_error(
+            "Scene has no members with positive retained-factor mass");
+    }
+    RowMajorMatrixXd retained(output.projected_rows.size(),
+        static_cast<Eigen::Index>(selection.retained_indices.size()));
+    for (size_t target_row = 0;
+            target_row < output.projected_rows.size(); ++target_row) {
+        const int32_t source_row = output.projected_rows[target_row];
+        for (size_t target_factor = 0;
+                target_factor < selection.retained_indices.size();
+                ++target_factor) {
+            retained(static_cast<Eigen::Index>(target_row),
+                static_cast<Eigen::Index>(target_factor)) = values(source_row,
+                    selection.retained_indices[target_factor]);
+        }
     }
     output.helmert = normalized_helmert(
         static_cast<int32_t>(selection.retained_indices.size()));

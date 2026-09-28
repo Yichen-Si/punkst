@@ -863,7 +863,8 @@ punkst::linear_embedding::select_projection_factors(
             || minimum_factors <= 0 || minimum_factors > values.cols()
             || !(min_cover_mass > 0.0) || min_cover_mass > 1.0
             || !std::isfinite(min_cover_mass)
-            || min_mass < 0.0 || !std::isfinite(min_mass)) {
+            || min_mass < 0.0 || min_mass > 1.0
+            || !std::isfinite(min_mass)) {
         throw std::invalid_argument("Invalid projection factor selection");
     }
     const Eigen::Index factors = values.cols();
