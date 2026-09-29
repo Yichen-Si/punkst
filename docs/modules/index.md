@@ -8,6 +8,7 @@ punkst provides several command-line tools for analyzing high resolution spatial
 - [tiles2hex](tiles2hex.md): Group pixels into non-overlapping hexagons for spot level analysis
 - [tiles2rois](tiles2rois.md): Aggregate tiled transcript counts into GeoJSON-defined ROIs
 - [topic-model](lda4hex.md): Fit LDA to single cell or spot level data
+- [reference-screen](screen-ref.md): Screen pseudobulk references against fitted LDA factors
 - [gamma-pois](gammapois.md): Fit Gamma-Poisson factor model to single cell or spot level data
 - [feature-eval](feature_eval.md): Visualize feature-level diagnostic statistics for topic models
 - [Leiden](leiden.md): Cluster factor embeddings on a cosine or Hellinger k-NN graph

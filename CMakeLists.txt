@@ -353,6 +353,7 @@ set(SOURCE_FILES
     script/fit_hdp.cpp
     script/transform_lda.cpp
     script/factor_evaluation.cpp
+    script/reference_screen.cpp
     script/factor_eval_naive.cpp
     src/slda.hpp
     src/tiles2minibatch.hpp

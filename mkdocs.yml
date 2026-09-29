@@ -53,6 +53,7 @@ nav:
     - tiles2hex: modules/tiles2hex.md
     - tiles2rois: modules/tiles2rois.md
     - topic-model: modules/lda4hex.md
+    - reference-screen: modules/screen-ref.md
     - Gamma-Poisson: modules/gammapois.md
     - Leiden: modules/leiden.md
     - Probabilistic partition classifier: modules/partition-classifier.md
