@@ -59,8 +59,11 @@ Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
 total number of threads; by default each thread works on one tile at a time so the peak memory scales with the number of threads. There are two options to separately control the number of threads and the peak memory usage:
 - `--max-concurrent-tiles` limits the number of tiles that can be processed simultaneously. For example, `--threads 8 --max-concurrent-tiles 2` allows two active
 tiles and allocate the remaining threads to within-tile parallelization.
-- `--max-ram-gb` directly limits the peak memory usage but it is **not** a hard limit. On Linux, the
-estimate adapts to observed memory use. This is a best-effort target because tile and buffer sizes vary, a few percents of excess is expected.
+- `--max-ram-gb` sets a best-effort RAM target; it is **not** a hard limit. On Linux and macOS,
+  the scheduler samples process resident memory and increases tile estimates after an observed excess.
+  It reports the sampled peak for each phase. If RSS sampling fails, it warns and uses fixed estimates
+  for that phase. A tile whose estimate exceeds the target still runs alone, so memory use can exceed
+  the target.
 
 Both limits apply when set. For runtime overhead diagnosis, use `--profile-e-step` to profile the time spent in each inference stage.
 
