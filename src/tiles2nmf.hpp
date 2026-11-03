@@ -87,15 +87,15 @@ public:
         min_ct_ = min_ct;
     }
 
-    void run_em(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr) const {
+    void run_em(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr, bool parallelRows = false) const {
         if (mlr_initialized_) {
-            run_em_mlr(batch, stats, max_iter, tol);
+            run_em_mlr(batch, stats, max_iter, tol, parallelRows);
             return;
         }
         if (!pnmf_initialized_) {
             error("%s: model not initialized, call init_pnmf or init_mlr first", __func__);
         }
-        run_em_pnmf(batch, stats, max_iter, tol, phi0);
+        run_em_pnmf(batch, stats, max_iter, tol, phi0, parallelRows);
     }
 
     template<typename Derived>
@@ -113,7 +113,7 @@ public:
         mlr_initialized_ = true;
     }
 
-    void run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1) const;
+    void run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, bool parallelRows = false) const;
 
     template<typename Derived>
     void init_pnmf(const Eigen::MatrixBase<Derived>& beta, MLEOptions opts, double L = 1000, bool exact = false) {
@@ -141,7 +141,7 @@ public:
         beta0_ = beta0;
     }
 
-    void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr) const;
+    void run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter = -1, double tol = -1, std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr, bool parallelRows = false) const;
 
     bool is_mlr_initialized() const {return mlr_initialized_;}
     bool is_pnmf_initialized() const {return pnmf_initialized_;}

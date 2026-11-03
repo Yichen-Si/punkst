@@ -203,14 +203,14 @@ public:
 
     // Transform: compute document-topic distributions for a list of documents
     // Return gamma (Dirichlet parameters) matrix, D x K
-    RowMajorMatrixXd transform(const std::vector<Document>& docs) {
-        return transform_common(docs, [](const auto& d) -> const Document& { return d; });
+    RowMajorMatrixXd transform(const std::vector<Document>& docs, std::optional<uint64_t> tileStream = std::nullopt) {
+        return transform_common(docs, [](const auto& d) -> const Document& { return d; }, tileStream);
     }
     RowMajorMatrixXd transform(DocumentView docs) {
         return transform_common(docs, [](const auto& d) -> const Document& { return d; });
     }
-    RowMajorMatrixXd transform(const std::vector<SparseObs>& docs) {
-        return transform_common(docs, [](const auto& d) -> const Document& { return d.doc; });
+    RowMajorMatrixXd transform(const std::vector<SparseObs>& docs, std::optional<uint64_t> tileStream = std::nullopt) {
+        return transform_common(docs, [](const auto& d) -> const Document& { return d.doc; }, tileStream);
     }
     RowMajorMatrixXd transform_gamma(DocumentView docs) {
         return transform_gamma_common(docs, [](const auto& d) -> const Document& { return d; });
@@ -237,7 +237,8 @@ private:
     }
 
     template <typename Docs, typename DocAccessor>
-    RowMajorMatrixXd transform_common(const Docs& docs, DocAccessor&& doc_of) {
+    RowMajorMatrixXd transform_common(const Docs& docs, DocAccessor&& doc_of,
+                                     std::optional<uint64_t> tileStream = std::nullopt) {
         const int n_docs = static_cast<int>(docs.size());
         const int ncol = algo_ == InferenceType::SVB_DN ? n_topics_ + 1 : n_topics_;
         RowMajorMatrixXd gamma(n_docs, ncol);
@@ -245,7 +246,8 @@ private:
         auto process_doc = [&](int d) {
             const uint64_t stream = deterministic_rng_
                 ? doc_stream(static_cast<uint64_t>(d),
-                    0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_))
+                    0x41f2c7d3ULL ^ static_cast<uint64_t>(update_count_),
+                    tileStream ? *tileStream : thread_rng_stream())
                 : 0;
             const Document& doc = doc_of(docs[d]);
             switch (algo_) {
@@ -438,8 +440,12 @@ private:
     }
 
     uint64_t doc_stream(uint64_t doc_index, uint64_t phase) const {
+        return doc_stream(doc_index, phase, thread_rng_stream());
+    }
+
+    uint64_t doc_stream(uint64_t doc_index, uint64_t phase, uint64_t tileStream) const {
         uint64_t base = static_cast<uint64_t>(static_cast<uint32_t>(seed_));
-        base ^= (thread_rng_stream() + 1ULL) * 0xd2b74407b1ce6e93ULL;
+        base ^= (tileStream + 1ULL) * 0xd2b74407b1ce6e93ULL;
         uint64_t mixed = base ^ (phase * 0x9e3779b97f4a7c15ULL) ^ (doc_index + 1ULL);
         return ::splitmix64(mixed);
     }

@@ -5,6 +5,7 @@
 #include "tiles2minibatch.hpp"
 #include "lda.hpp"
 #include "slda.hpp"
+#include <fstream>
 
 template<typename T>
 class Tiles2SLDA : public Tiles2MinibatchBase<T> {
@@ -24,6 +25,7 @@ public:
 
     void setLloydIter(int32_t nIter) { nLloydIter_ = nIter; }
     void setSpatialPriorV1(bool enabled = true);
+    void setProfileEStep();
     void set_background_prior(VectorXf& eta0, double a0, double b0, bool outputExpand = false);
     void set_background_prior(std::string& bgModelFile, double a0, double b0, bool outputExpand = false);
     int32_t getFactorCount() const override { return K_; }
@@ -55,18 +57,21 @@ public:
     double eps_;
     int32_t nLloydIter_ = 1;
     MatrixXf pseudobulk_; // M x K
+    VectorXf ownedBackground_; // background counts from output-owned records
     RowMajorMatrixXf confusion_; // K x K
     std::mutex pseudobulkMutex_; // Protects pseudobulk
     bool fitBackground_ = false;
     bool spatialPriorV1_ = false;
+    bool profileEStep_ = false;
+    std::ofstream profileStream_;
+    std::mutex profileMutex_;
 
-    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors = nullptr);
-    int32_t initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
+    int32_t initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, uint64_t stream, const vec2f_t* fixedAnchors = nullptr);
+    int32_t initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, uint64_t stream);
     void initAnchorGamma(Minibatch& minibatch);
     double makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch);
     void processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) override;
     void postRun() override;
-    void onWorkerStart(int threadId) override;
 
     void writeGlobalMatrixToTsv();
 

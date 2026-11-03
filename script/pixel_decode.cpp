@@ -74,7 +74,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
     std::string inTsv, inIndex, modelFile, anchorFile, outFile, outPref, tmpDirPath, weightFile;
     std::string sampleList; // for multi-sample
-    int nThreads = 1, seed = -1, debug_ = 0, verbose = 0;
+    int nThreads = 1, maxConcurrentTiles = 0, seed = -1, debug_ = 0, verbose = 0;
+    double maxRamGb = 0;
     int icol_x, icol_y, icol_z = -1, icol_feature, icol_val;
     double hexSize = -1, hexGridDist = -1, anchorDist = -1;
     double decoderRadius = -1, halfLifeDist = 0.7;
@@ -98,6 +99,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     bool outputOritinalData = false;
     bool singleFeaturePixel = false;
     bool singleMolecule = false;
+    bool profileEStep = false;
     bool featureIsIndex = false;
     bool coordsAreInt = false;
     bool outputAnchor = false;
@@ -161,6 +163,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
       .add_option("radius", "Support radius", decoderRadius)
       .add_option("n-moves", "Number of steps to slide on each axis to create anchors", nMoves)
       .add_option("threads", "Number of threads to use (default: 1)", nThreads)
+      .add_option("max-concurrent-tiles", "Maximum simultaneously processed tiles (default: --threads)", maxConcurrentTiles)
+      .add_option("max-ram-gb", "Best-effort RAM target in decimal GB (default: no target)", maxRamGb)
+      .add_option("profile-e-step", "Write per-minibatch SLDA E-step timing TSV", profileEStep)
       .add_option("seed", "Random seed", seed);
     // Background model options
     pl.add_option("background-model", "Background model file", bgModelFile)
@@ -207,10 +212,16 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     if (debug_ > 0) {
         logger::Logger::getInstance().setLevel(logger::LogLevel::DEBUG);
     }
+    if (nThreads < 1 || maxConcurrentTiles < 0 || maxConcurrentTiles > nThreads ||
+        !std::isfinite(maxRamGb) || maxRamGb < 0 ||
+        static_cast<long double>(maxRamGb) >= static_cast<long double>(std::numeric_limits<uint64_t>::max()) / 1e9L) {
+        error("Require --threads >= 1, 0 <= --max-concurrent-tiles <= --threads, and --max-ram-gb within the supported range");
+    }
 
     if (algo != "slda" && algo != "nmf") {
         error("Invalid --algo (%s). Must be either \"slda\" or \"nmf\"", algo.c_str());
     }
+    if (profileEStep && algo != "slda") error("--profile-e-step requires --algo slda");
     if (spatialPriorV1 && algo != "slda") {
         error("--spatial-prior-v1 is supported only with --algo slda");
     }
@@ -460,6 +471,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
         }
         fit_background = true;
     }
+    if (profileEStep && fit_background && !singleMolecule && !singleFeaturePixel)
+        error("--profile-e-step is unsupported for sparse background SLDA");
 
     auto configure_decoder = [&](auto& decoder, const std::string& anchorFile, bool allowExternalAnchors) {
         decoder.setOutputCoordDigits(floatCoordDigits);
@@ -515,6 +528,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
                 configure_decoder(decoder, ds.anchorFile, true);
+                decoder.setParallelLimits(maxConcurrentTiles, maxRamGb);
                 decoder.run();
             } else {
                 Tiles2NMF<float> decoder(
@@ -526,6 +540,7 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                     decoder.set_background_model(pi0, eta0, outBgExpand);
                 }
                 configure_decoder(decoder, ds.anchorFile, true);
+                decoder.setParallelLimits(maxConcurrentTiles, maxRamGb);
                 decoder.run();
             }
         }
@@ -554,6 +569,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile, !use3D);
+            if (profileEStep) tiles2slda.setProfileEStep();
+            tiles2slda.setParallelLimits(maxConcurrentTiles, maxRamGb);
             tiles2slda.run();
         } else {
             Tiles2SLDA<float> tiles2slda(nThreads, decoderRadius, decoderPadding, ds.outPref, tmpDirPath, lda, tileReader, parser, ioConfig, seed, minInitCount, halfLifeDist, pixelResolution, 0, topK, verbose, debug_, geometryUnitSize, nMoves, inMemory);
@@ -562,6 +579,8 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
                 tiles2slda.set_background_prior(eta0, a0, b0, outBgExpand);
             }
             configure_decoder(tiles2slda, ds.anchorFile, !use3D);
+            if (profileEStep) tiles2slda.setProfileEStep();
+            tiles2slda.setParallelLimits(maxConcurrentTiles, maxRamGb);
             tiles2slda.run();
         }
     }

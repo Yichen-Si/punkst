@@ -4,6 +4,8 @@
 #include "tiles2minibatch.hpp"
 #include "utils.h"
 #include <atomic>
+#include <array>
+#include <chrono>
 #include <cstdint>
 #include <unordered_map>
 
@@ -11,6 +13,23 @@ using Eigen::VectorXf;
 using Eigen::RowVectorXf;
 using Eigen::SparseMatrix;
 using RowMajorMatrixXf = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+
+struct EStepProfile {
+    enum Stage { Setup, Theta, PhiUpdate, PhiNormalize, PsiUpdate, PsiNormalize,
+                 Gamma, Background, Convergence, SufficientStats, Other, Count };
+    using Clock = std::chrono::steady_clock;
+    std::array<double, Count> ms{};
+    Clock::time_point start{}, previous{};
+    void begin() { start = previous = Clock::now(); }
+    void mark(Stage stage) {
+        const auto now = Clock::now();
+        ms[stage] += std::chrono::duration<double, std::milli>(now - previous).count();
+        previous = now;
+    }
+    double total() const {
+        return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+    }
+};
 
 class OnlineSLDA {
 public:
@@ -139,21 +158,23 @@ public:
     float do_e_step(Minibatch& batch,
         RowMajorMatrixXf* ss = nullptr,
         std::vector<std::unordered_map<uint32_t, float>>* phi0 = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr)
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr,
+        bool parallelRows = false, EStepProfile* profile = nullptr)
     {
         if (fit_background_ && phi0 == nullptr) {
             error("%s: background mode requires phi0 storage", __func__);
         }
         if (batch.storageMode == Minibatch::StorageMode::SingleMolecule) {
             if (fit_background_) {
-                return do_e_step_single_molecule_bg(batch, *phi0, ss, n_iter, final_meanchange);
+                return do_e_step_single_molecule_bg(batch, *phi0, ss, n_iter, final_meanchange, parallelRows, profile);
             }
-            return do_e_step_single_molecule(batch, ss, n_iter, final_meanchange);
+            return do_e_step_single_molecule(batch, ss, n_iter, final_meanchange, parallelRows, profile);
         }
         if (fit_background_) {
-            return do_e_step_bg(batch, *phi0, ss, n_iter, final_meanchange);
+            if (profile) error("E-step profiling is unsupported for sparse background SLDA");
+            return do_e_step_bg(batch, *phi0, ss, n_iter, final_meanchange, parallelRows);
         }
-        return do_e_step_standard(batch, ss, n_iter, final_meanchange);
+        return do_e_step_standard(batch, ss, n_iter, final_meanchange, parallelRows, profile);
     }
 
     void approx_ll(Minibatch& batch) {
@@ -223,7 +244,8 @@ public:
     }
 
     float do_e_step_standard(Minibatch& batch, RowMajorMatrixXf* ss = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr, bool parallelRows = false,
+        EStepProfile* profile = nullptr) {
         // (N x M) * (M x K) = (N x K)
         RowMajorMatrixXf Xb = batch.mtx * Elog_beta_;
         RowMajorMatrixXf alpha = get_alpha(batch);
@@ -243,37 +265,67 @@ public:
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
+        GammaWorkspace gammaWorkspace(batch.N, batch.n, K_, parallelRows, 8);
+        if (profile) profile->mark(EStepProfile::Setup);
         while (it < max_iter_inner_ && meanchange_phi > tol_) {
             it++;
             Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            if (profile) profile->mark(EStepProfile::Theta);
             // Update phi.
             // psi: (N x n) * Elog_theta (n x K) → phi: (N x K)
-            batch.phi = batch.psi * Elog_theta + Xb;
+            if (parallelRows && batch.N >= 1024) {
+                batch.phi.resize(batch.N, K_);
+                tbb::parallel_for(tbb::blocked_range<int>(0, batch.N, 256),
+                    [&](const tbb::blocked_range<int>& rows) {
+                        for (int i = rows.begin(); i < rows.end(); ++i) {
+                            batch.phi.row(i) = Xb.row(i);
+                            for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator edge(batch.psi, i); edge; ++edge)
+                                batch.phi.row(i) += edge.value() * Elog_theta.row(edge.col());
+                        }
+                    });
+            } else {
+                batch.phi = batch.psi * Elog_theta + Xb;
+            }
+            if (profile) profile->mark(EStepProfile::PhiUpdate);
             // exponentiate and row-normalize
-            rowSoftmaxInPlace(batch.phi);
+            softmax_phi(batch.phi, parallelRows);
+            if (profile) profile->mark(EStepProfile::PhiNormalize);
             // Update psi.
             // (psi has the same sparsity pattern as logitwij)
             VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
-            for (int i = 0; i < batch.psi.rows(); ++i) { // could parallelize
+            auto updateRow = [&](int i) {
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                     int j = it1.col();
                     // dot product of i-th row of phi with j-th row of Elog_theta
                     float sum_val = batch.phi.row(i).dot(Elog_theta.row(j));
                     // Updated value at (i,j)
-                    batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
+                    it1.valueRef() = it2.value() + sum_val + extra(i);
                 }
-            }
+            };
+            if (parallelRows && batch.psi.rows() >= 1024)
+                tbb::parallel_for(0, static_cast<int>(batch.psi.rows()), updateRow);
+            else
+                for (int i = 0; i < batch.psi.rows(); ++i) updateRow(i);
+            if (profile) profile->mark(EStepProfile::PsiUpdate);
             normalize_spatial_scores(batch.psi);
+            if (profile) profile->mark(EStepProfile::PsiNormalize);
             // Update gamma: gamma = alpha + psi^T * phi.
             // psi^T: (n x N), phi: (N x K) → gamma: (n x K)
-            batch.gamma = alpha + batch.psi.transpose() * batch.phi;
+            if (!gammaWorkspace.accumulate(batch.gamma, alpha, [&](RowMajorMatrixXf& part, int i) {
+                    for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator edge(batch.psi, i); edge; ++edge)
+                        part.row(edge.col()) += edge.value() * batch.phi.row(i);
+                })) {
+                batch.gamma = alpha + batch.psi.transpose() * batch.phi;
+            }
+            if (profile) profile->mark(EStepProfile::Gamma);
             // Check convergence
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = batch.gamma;
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
+            if (profile) profile->mark(EStepProfile::Convergence);
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
                 printf("E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
             }
@@ -292,6 +344,7 @@ public:
         if (ss != nullptr) {
             *ss = batch.mtx.transpose() * batch.phi; // M x N * N x K → M x K
         }
+        if (profile) profile->mark(EStepProfile::SufficientStats);
         if (heuristic_final_hardcall_) { // TEMPORARY TEST - remove anchor level uncertainty
             for (int i = 0; i < gamma_old.rows(); i++) {
                 int maxIndex;
@@ -304,14 +357,16 @@ public:
             }
             Elog_theta = dirichlet_entropy_2d(gamma_old);
             batch.phi = batch.psi * Elog_theta + Xb;
-            rowSoftmaxInPlace(batch.phi);
+            softmax_phi(batch.phi, parallelRows);
         }
+        if (profile) profile->mark(EStepProfile::Other);
         return 0;
     }
 
     float do_e_step_single_molecule(Minibatch& batch,
         RowMajorMatrixXf* ss = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr, bool parallelRows = false,
+        EStepProfile* profile = nullptr) {
         if (batch.storageMode != Minibatch::StorageMode::SingleMolecule) {
             error("%s: expected SingleMolecule minibatch", __func__);
         }
@@ -335,29 +390,45 @@ public:
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
+        GammaWorkspace gammaWorkspace(batch.N, batch.n, K_, parallelRows, 16);
+        if (profile) profile->mark(EStepProfile::Setup);
         while (it < max_iter_inner_ && meanchange_phi > tol_) {
             it++;
             batch.phi = Xb;
             // Update phi: phi_i = Xb_i + sum_{j in N(i)} psi_ij * Elog_theta_j
-            for (int32_t i = 0; i < batch.N; ++i) {
+            auto updatePhi = [&](int32_t i) {
                 for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
                     batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
                 }
-            }
-            rowSoftmaxInPlace(batch.phi);
-            update_single_molecule_psi(batch, Xb, Elog_theta);
-            batch.gamma = alpha;
-            for (int32_t i = 0; i < batch.N; ++i) {
-                for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
-                    batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
+            };
+            if (parallelRows && batch.N >= 1024) tbb::parallel_for(0, batch.N, updatePhi);
+            else for (int32_t i = 0; i < batch.N; ++i) updatePhi(i);
+            if (profile) profile->mark(EStepProfile::PhiUpdate);
+            softmax_phi(batch.phi, parallelRows);
+            if (profile) profile->mark(EStepProfile::PhiNormalize);
+            update_single_molecule_psi(batch, Xb, Elog_theta, parallelRows);
+            if (profile) profile->mark(EStepProfile::PsiUpdate);
+            if (!gammaWorkspace.accumulate(batch.gamma, alpha, [&](RowMajorMatrixXf& part, int i) {
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e)
+                        part.row(batch.edgeAnchorIdx[e]) +=
+                            (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
+                })) {
+                batch.gamma = alpha;
+                for (int32_t i = 0; i < batch.N; ++i) {
+                    for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e)
+                        batch.gamma.row(batch.edgeAnchorIdx[e]) +=
+                            (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
                 }
             }
+            if (profile) profile->mark(EStepProfile::Gamma);
             Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            if (profile) profile->mark(EStepProfile::Theta);
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = std::move(batch.gamma);
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
+            if (profile) profile->mark(EStepProfile::Convergence);
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
                 printf("SingleMolecule E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
             }
@@ -375,6 +446,7 @@ public:
                 ss->row(batch.featureIdx[i]) += batch.featureWeight[i] * batch.phi.row(i);
             }
         }
+        if (profile) profile->mark(EStepProfile::SufficientStats);
         if (heuristic_final_hardcall_) {
             for (int i = 0; i < gamma_old.rows(); i++) {
                 int maxIndex;
@@ -392,15 +464,16 @@ public:
                     batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
                 }
             }
-            rowSoftmaxInPlace(batch.phi);
+            softmax_phi(batch.phi, parallelRows);
         }
+        if (profile) profile->mark(EStepProfile::Other);
         return 0;
     }
 
     float do_e_step_bg(Minibatch& batch,
         std::vector<std::unordered_map<uint32_t, float>>& phi0,
         RowMajorMatrixXf* ss = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr, bool parallelRows = false) {
         SparseMatrix<float, Eigen::RowMajor> fgmtx = batch.mtx; // N x M
         const float pi0 = static_cast<float> (a0_ / (a0_ + b0_));
         phi0.clear();
@@ -443,15 +516,19 @@ public:
             // Update psi.
             // (psi has the same sparsity pattern as logitwij)
             VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
-            for (int i = 0; i < batch.psi.rows(); ++i) { // could parallelize
+            auto updateRow = [&](int i) {
                 // Iterate over the nonzero entries
                 for (SparseMatrix<float, Eigen::RowMajor>::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                     int j = it1.col();
                     float sum_val = batch.phi.row(i).dot(Elog_theta.row(j));
                     // Updated value at (i,j)
-                    batch.psi.coeffRef(i, j) = it2.value() + sum_val + extra(i);
+                    it1.valueRef() = it2.value() + sum_val + extra(i);
                 }
-            }
+            };
+            if (parallelRows && batch.psi.rows() >= 1024)
+                tbb::parallel_for(0, static_cast<int>(batch.psi.rows()), updateRow);
+            else
+                for (int i = 0; i < batch.psi.rows(); ++i) updateRow(i);
             normalize_spatial_scores(batch.psi);
             // Update gamma: gamma = alpha + psi^T * phi.
             // psi^T: (n x N), phi: (N x K) → gamma: (n x K)
@@ -516,7 +593,8 @@ public:
     float do_e_step_single_molecule_bg(Minibatch& batch,
         std::vector<std::unordered_map<uint32_t, float>>& phi0,
         RowMajorMatrixXf* ss = nullptr,
-        int32_t* n_iter = nullptr, double* final_meanchange = nullptr) {
+        int32_t* n_iter = nullptr, double* final_meanchange = nullptr, bool parallelRows = false,
+        EStepProfile* profile = nullptr) {
         if (batch.storageMode != Minibatch::StorageMode::SingleMolecule) {
             error("%s: expected SingleMolecule minibatch", __func__);
         }
@@ -545,17 +623,23 @@ public:
         double meanchange = tol_ + 1;
         double meanchange_phi = tol_ + 1;
         int it = 0;
+        if (profile) profile->mark(EStepProfile::Setup);
         while (it < max_iter_inner_ && meanchange > tol_) {
             it++;
             batch.phi = Xb;
-            for (int32_t i = 0; i < batch.N; ++i) {
+            auto updatePhi = [&](int32_t i) {
                 for (uint32_t e = batch.rowOffsets[i]; e < batch.rowOffsets[i + 1]; ++e) {
                     batch.phi.row(i) += batch.psiVal[e] * Elog_theta.row(batch.edgeAnchorIdx[e]);
                 }
-            }
-            rowSoftmaxInPlace(batch.phi);
+            };
+            if (parallelRows && batch.N >= 1024) tbb::parallel_for(0, batch.N, updatePhi);
+            else for (int32_t i = 0; i < batch.N; ++i) updatePhi(i);
+            if (profile) profile->mark(EStepProfile::PhiUpdate);
+            softmax_phi(batch.phi, parallelRows);
+            if (profile) profile->mark(EStepProfile::PhiNormalize);
 
-            update_single_molecule_psi(batch, Xb, Elog_theta);
+            update_single_molecule_psi(batch, Xb, Elog_theta, parallelRows);
+            if (profile) profile->mark(EStepProfile::PsiUpdate);
             // Update gamma
             batch.gamma = alpha;
             for (int32_t i = 0; i < batch.N; ++i) {
@@ -563,7 +647,9 @@ public:
                     batch.gamma.row(batch.edgeAnchorIdx[e]) += (batch.psiVal[e] * batch.phi.row(i)) * batch.featureWeight[i];
                 }
             }
+            if (profile) profile->mark(EStepProfile::Gamma);
             Elog_theta = dirichlet_entropy_2d(batch.gamma);
+            if (profile) profile->mark(EStepProfile::Theta);
             // Update background probabilities
             for (size_t i = 0; i < (size_t) batch.N; ++i) {
                 const uint32_t m = batch.featureIdx[i];
@@ -573,12 +659,14 @@ public:
                 fgWeight[i] = (1.0f - b) * batch.featureWeight[i];
                 Xb.row(i) = (1.0f - b) * Elog_beta_.row(m);
             }
+            if (profile) profile->mark(EStepProfile::Background);
 
             meanchange = mean_max_row_change(batch.gamma, gamma_old);
             gamma_old = std::move(batch.gamma);
             if (it > 0)
                 meanchange_phi = mean_max_row_change(batch.phi, phi_old);
             phi_old = batch.phi;
+            if (profile) profile->mark(EStepProfile::Convergence);
             if (verbose_ > 2 || (verbose_ > 1 && it % 10 == 0)) {
                 printf("SingleMolecule background E-step, iteration %d, mean change in gamma: %.4e; mean change in phi: %.4e\n", it, meanchange, meanchange_phi);
             }
@@ -598,6 +686,7 @@ public:
             b_ += c1;
             bg_marginal_ += bg_local;
         }
+        if (profile) profile->mark(EStepProfile::Background);
 
         if (n_iter) {
             *n_iter = it;
@@ -611,10 +700,62 @@ public:
                 ss->row(batch.featureIdx[i]) += fgWeight[i] * batch.phi.row(i);
             }
         }
+        if (profile) profile->mark(EStepProfile::SufficientStats);
+        if (profile) profile->mark(EStepProfile::Other);
         return c0 / (c0 + c1);
     }
 
 private:
+    struct GammaWorkspace {
+        int nRows = 0;
+        int shards = 0;
+        std::vector<RowMajorMatrixXf> parts;
+
+        GammaWorkspace(int N, int n, int K, bool parallelRows, int maxShards) : nRows(N) {
+            const size_t shardBytes = static_cast<size_t>(n) * static_cast<size_t>(K) * sizeof(float);
+            const size_t scratchShards = shardBytes ? (16u * 1024u * 1024u) / shardBytes : 0;
+            shards = parallelRows && N >= 8192
+                ? static_cast<int>(std::min({static_cast<size_t>(maxShards),
+                    static_cast<size_t>(tbb::this_task_arena::max_concurrency()),
+                    static_cast<size_t>(N / 4096), scratchShards})) : 0;
+            if (shards < 2) return;
+            parts.resize(static_cast<size_t>(shards));
+            for (auto& part : parts) part.resize(n, K);
+        }
+
+        template<class UpdateRow>
+        bool accumulate(RowMajorMatrixXf& gamma, const RowMajorMatrixXf& alpha, UpdateRow updateRow) {
+            if (shards < 2) return false;
+            tbb::parallel_for(0, shards, [&](int shard) {
+                auto& part = parts[static_cast<size_t>(shard)];
+                part.setZero();
+                const int first = static_cast<int>(static_cast<int64_t>(nRows) * shard / shards);
+                const int last = static_cast<int>(static_cast<int64_t>(nRows) * (shard + 1) / shards);
+                for (int i = first; i < last; ++i) updateRow(part, i);
+            });
+            gamma = alpha;
+            for (const auto& part : parts) gamma += part;
+            return true;
+        }
+    };
+
+    static void softmax_phi(RowMajorMatrixXf& phi, bool parallelRows) {
+        if (!parallelRows || phi.rows() < 1024) {
+            rowSoftmaxInPlace(phi);
+            return;
+        }
+        tbb::parallel_for(tbb::blocked_range<int>(0, static_cast<int>(phi.rows()), 256),
+            [&](const tbb::blocked_range<int>& rows) {
+                for (int i = rows.begin(); i < rows.end(); ++i) {
+                    auto row = phi.row(i);
+                    const float maxValue = row.maxCoeff();
+                    row.array() = (row.array() - maxValue).exp();
+                    const float sum = row.sum();
+                    row *= sum < std::numeric_limits<float>::epsilon() ? 1.0f : 1.0f / sum;
+                }
+            });
+    }
+
     struct RngState {
         std::mt19937 rng;
         uint64_t stream;
@@ -670,14 +811,15 @@ private:
     }
 
     void update_single_molecule_psi(Minibatch& batch,
-        const RowMajorMatrixXf& Xb, const RowMajorMatrixXf& Elog_theta) const
+        const RowMajorMatrixXf& Xb, const RowMajorMatrixXf& Elog_theta,
+        bool parallelRows = false) const
     {
         VectorXf extra = (batch.phi.array() * Xb.array()).rowwise().sum();
-        for (int32_t i = 0; i < batch.N; ++i) {
+        auto updateRow = [&](int32_t i) {
             const uint32_t start = batch.rowOffsets[i];
             const uint32_t end = batch.rowOffsets[i + 1];
             if (start == end) {
-                continue;
+                return;
             }
             if (spatial_prior_v1_) {
                 float rowMax = -std::numeric_limits<float>::infinity();
@@ -705,7 +847,9 @@ private:
                 }
                 normalize_single_molecule_psi_row(batch, start, end, rowsum);
             }
-        }
+        };
+        if (parallelRows && batch.N >= 1024) tbb::parallel_for(0, batch.N, updateRow);
+        else for (int32_t i = 0; i < batch.N; ++i) updateRow(i);
     }
 
     RowMajorMatrixXf get_alpha(const Minibatch& batch) const {

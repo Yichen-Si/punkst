@@ -8,7 +8,7 @@
 #include <utility>
 #include <unordered_map>
 
-void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double tol) const {
+void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double tol, bool parallelRows) const {
     if (!mlr_initialized_) {
         error("%s: not initialized, run init_global_parameter first", __func__);
     }
@@ -31,12 +31,14 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
     for (; iter < max_iter; iter++) {
         SparseRowMatf ymtx = batch.psi.transpose() * batch.mtx; // n x M
         batch.theta = mlr_.predict(ymtx); // n x K
-        for (int j = 0; j < batch.N; ++j) {
+        auto updateRow = [&](int j) {
             for (SparseRowMatf::InnerIterator it1(batch.psi, j), it2(batch.wij, j); it1 && it2; ++it1, ++it2) {
                 int i = it1.col();
                 it1.valueRef() = Xb.row(j).dot(batch.theta.row(i)) + it2.value();
             }
-        }
+        };
+        if (parallelRows && batch.N >= 1024) tbb::parallel_for(0, batch.N, updateRow);
+        else for (int j = 0; j < batch.N; ++j) updateRow(j);
         expitAndRowNormalize(batch.psi);
 
         // check convergence
@@ -57,7 +59,7 @@ void PixelEM::run_em_mlr(Minibatch& batch, EMstats& stats, int max_iter, double 
     notice("%s: Finished EM with %d iterations. Final mean max change in theta: %.4e", __func__, iter, meanchange_theta);
 }
 
-void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol, std::vector<std::unordered_map<uint32_t, float>>* phi0) const {
+void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double tol, std::vector<std::unordered_map<uint32_t, float>>* phi0, bool parallelRows) const {
     if (!pnmf_initialized_) {
         error("%s: not initialized, run init_global_parameter first", __func__);
     }
@@ -142,7 +144,7 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
         MatrixXf loglam = (((beta_f_ * batch.theta.transpose()).array().exp() - 1.0)).max(1e-12).log(); // M x n
 
         RowMajorMatrixXf theta_norm = rowNormalize(batch.theta);
-        for (int i = 0; i < batch.N; ++i) {
+        auto updateRow = [&](int i) {
             for (SparseRowMatf::InnerIterator it1(batch.psi, i), it2(batch.wij, i); it1 && it2; ++it1, ++it2) {
                 int j = it1.col();
                 it1.valueRef() = mtx->row(i).dot(loglam.col(j)) + it2.value();
@@ -152,7 +154,9 @@ void PixelEM::run_em_pnmf(Minibatch& batch, EMstats& stats, int max_iter, double
                 // }
                 // it1.valueRef() = Xb.row(i).dot(theta_norm.row(j)); //+ it2.value();
             }
-        }
+        };
+        if (parallelRows && batch.N >= 1024) tbb::parallel_for(0, batch.N, updateRow);
+        else for (int i = 0; i < batch.N; ++i) updateRow(i);
 
         int32_t total_iters = std::accumulate(niters.begin(), niters.end(), 0);
         avg_iters = static_cast<double>(total_iters) / nkept;
@@ -353,7 +357,8 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
     PixelEM::EMstats stats;
     // store background probability (per pixel per feature)
     std::vector<std::unordered_map<uint32_t, float>> phi0;
-    empois_.run_em(minibatch, stats, -1, -1, &phi0);
+    empois_.run_em(minibatch, stats, -1, -1, &phi0,
+                   Base::activeJobs_.load(std::memory_order_relaxed) < Base::nThreads);
     debug("%s: Thread %d (ticket %d) finished EM", __func__, threadId, ticket);
 
     MatrixXf topVals;
@@ -368,7 +373,7 @@ void Tiles2NMF<T>::processTile(TileData<T>& tileData, int threadId, int ticket, 
         auto anchorResult = Base::formatAnchorResult(
             anchors, anchorTopVals, anchorTopIds, ticket,
             tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-        anchorQueue.push(std::move(anchorResult));
+        Base::submitAnchorResult(std::move(anchorResult), threadId);
     }
 
     notice("Thread %d (ticket %d) fit minibatch with %d anchors, %zu pixels, average degree %.2f, and output %zu internal pixels in %d iterations. Final mean max change in theta: %.1e (final averaged inner iterations %.1f)",

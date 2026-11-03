@@ -6,7 +6,9 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <fstream>
+#include <exception>
 #include <thread>
+#include <chrono>
 #include <map>
 #include <algorithm>
 
@@ -189,30 +191,150 @@ void Tiles2MinibatchBase<T>::run() {
         anchorWriter = std::thread(&Tiles2MinibatchBase<T>::anchorWriterWorker, this);
     }
 
-    notice("Phase 1 Launching %d worker threads", nThreads);
-    workThreads.clear();
-    workThreads.reserve(static_cast<size_t>(nThreads));
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.emplace_back(&Tiles2MinibatchBase<T>::tileWorker, this, i);
-    }
-
+    try {
     std::vector<TileKey> tileList;
     tileReader.getTileList(tileList);
     std::sort(tileList.begin(), tileList.end());
     int32_t ticket = 0;
-    for (const auto& tile : tileList) {
-        tileQueue.push(std::make_pair(tile, ticket++));
-        if (debug_ > 0 && ticket >= debug_) {
-            break;
+    if (debug_ > 0 && tileList.size() > static_cast<size_t>(debug_)) {
+        tileList.resize(static_cast<size_t>(debug_));
+    }
+    const int tileLimit = maxConcurrentTiles_ > 0 ? maxConcurrentTiles_ : nThreads;
+    tbb::task_arena arena(nThreads, 0);
+    auto runJobs = [&](size_t count, auto estimate, auto execute) {
+        tbb::task_group group;
+        std::mutex mutex;
+        std::condition_variable changed;
+        size_t next = 0;
+        size_t head = 0;
+        std::vector<uint8_t> finished(count, 0);
+        int active = 0;
+        size_t completed = 0;
+        uint64_t reserved = 0;
+        std::exception_ptr failure;
+        std::vector<bool> occupied(static_cast<size_t>(tileLimit), false);
+        uint64_t baseline = 0;
+#if defined(__linux__)
+        auto rss = []() -> uint64_t {
+            std::ifstream statm("/proc/self/statm");
+            uint64_t pages = 0, resident = 0;
+            if (statm >> pages >> resident) {
+                return resident * static_cast<uint64_t>(::sysconf(_SC_PAGESIZE));
+            }
+            return 0;
+        };
+        baseline = rss();
+#endif
+        double expansion = 12.0;
+        uint64_t peakRss = baseline;
+#if defined(__linux__)
+        std::atomic<bool> stopSampling{false};
+        std::atomic<uint64_t> sampledPeak{baseline};
+        std::thread sampler;
+        if (maxRamBytes_) {
+            sampler = std::thread([&] {
+                while (!stopSampling.load(std::memory_order_relaxed)) {
+                    const uint64_t current = rss();
+                    uint64_t old = sampledPeak.load(std::memory_order_relaxed);
+                    while (current > old && !sampledPeak.compare_exchange_weak(
+                        old, current, std::memory_order_relaxed)) {}
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+            });
         }
-    }
-    tileQueue.set_done();
-    for (auto& t : workThreads) {
-        t.join();
-    }
-    workThreads.clear();
+#endif
+        bool warned = false;
+        try {
+        for (;;) {
+            std::unique_lock<std::mutex> lock(mutex);
+            if ((next >= count || failure) && active == 0) break;
+            while (!failure && next < count && active < tileLimit &&
+                   (!useTicketSystem_ || next - head < static_cast<size_t>(2 * tileLimit))) {
+                const uint64_t charge = maxRamBytes_ ? static_cast<uint64_t>(std::min<long double>(
+                    static_cast<long double>(std::numeric_limits<uint64_t>::max()),
+                    static_cast<long double>(std::max<uint64_t>(1, estimate(next))) * expansion)) : 0;
+                if (maxRamBytes_ && active > 0 &&
+                    (baseline >= maxRamBytes_ || charge > maxRamBytes_ - baseline ||
+                     reserved > maxRamBytes_ - baseline - charge)) {
+                    break;
+                }
+                if (maxRamBytes_ && active == 0 &&
+                    (baseline >= maxRamBytes_ || charge > maxRamBytes_ - baseline) && !warned) {
+                    warning("RAM target cannot fit this tile estimate; running it alone");
+                    warned = true;
+                }
+                int slot = 0;
+                while (occupied[static_cast<size_t>(slot)]) ++slot;
+                occupied[static_cast<size_t>(slot)] = true;
+                ++active;
+                activeJobs_.fetch_add(1, std::memory_order_relaxed);
+                reserved += charge;
+                const size_t job = next++;
+                lock.unlock();
+                arena.execute([&] {
+                    group.run([&, job, slot, charge] {
+                        try {
+                            execute(job, slot);
+                        } catch (...) {
+                            std::lock_guard<std::mutex> lock(mutex);
+                            if (!failure) failure = std::current_exception();
+                        }
+                        {
+                            std::lock_guard<std::mutex> lock(mutex);
+                            occupied[static_cast<size_t>(slot)] = false;
+                            --active;
+                            ++completed;
+                            finished[job] = 1;
+                            while (head < count && finished[head]) ++head;
+                            reserved -= charge;
+                            activeJobs_.fetch_sub(1, std::memory_order_relaxed);
+                        }
+                        changed.notify_one();
+                    });
+                });
+                lock.lock();
+            }
+            if (active > 0) {
+                const size_t before = completed;
+                changed.wait(lock, [&] { return completed != before; });
+#if defined(__linux__)
+                const uint64_t current = rss();
+                peakRss = std::max({peakRss, current, sampledPeak.load(std::memory_order_relaxed)});
+                if (maxRamBytes_ && active == 0) baseline = std::max(baseline, current);
+                if (maxRamBytes_ && peakRss > maxRamBytes_) {
+                    expansion = std::min(1024.0, expansion *
+                        static_cast<double>(peakRss) / static_cast<double>(maxRamBytes_));
+                }
+#endif
+            }
+        }
+        arena.execute([&] { group.wait(); });
+        } catch (...) {
+            arena.execute([&] { group.wait(); });
+#if defined(__linux__)
+            stopSampling.store(true, std::memory_order_relaxed);
+            if (sampler.joinable()) sampler.join();
+#endif
+            throw;
+        }
+#if defined(__linux__)
+        stopSampling.store(true, std::memory_order_relaxed);
+        if (sampler.joinable()) sampler.join();
+        peakRss = std::max(peakRss, sampledPeak.load(std::memory_order_relaxed));
+#endif
+        if (maxRamBytes_) {
+            notice("RAM target %.2f GB; sampled phase peak RSS %.2f GB",
+                   maxRamBytes_ / 1e9, peakRss / 1e9);
+            if (peakRss > maxRamBytes_) warning("Observed RSS exceeded the best-effort RAM target");
+        }
+        if (failure) std::rethrow_exception(failure);
+    };
+    notice("Phase 1: %d compute threads, at most %d concurrent tiles", nThreads, tileLimit);
+    runJobs(tileList.size(), [&](size_t i) { return tileReader.getTileInputBytes(tileList[i]); },
+        [&](size_t i, int slot) { tileWorker(slot, tileList[i], static_cast<int32_t>(i)); });
+    ticket = static_cast<int32_t>(tileList.size());
 
-    notice("Phase 2 Launching %d worker threads", nThreads);
+    notice("Phase 2: %d compute threads, at most %d concurrent boundary jobs", nThreads, tileLimit);
     std::vector<std::shared_ptr<BoundaryBuffer>> buffers;
     buffers.reserve(boundaryBuffers.size());
     for (auto &kv : boundaryBuffers) {
@@ -223,18 +345,23 @@ void Tiles2MinibatchBase<T>::run() {
            const std::shared_ptr<BoundaryBuffer>& B) {
             return A->key < B->key;
         });
-    for (auto &bufferPtr : buffers) {
-        bufferQueue.push(std::make_pair(bufferPtr, ticket++));
-    }
-    bufferQueue.set_done();
-    workThreads.reserve(static_cast<size_t>(nThreads));
-    for (int i = 0; i < nThreads; ++i) {
-        workThreads.emplace_back(&Tiles2MinibatchBase<T>::boundaryWorker, this, i);
-    }
-    for (auto& t : workThreads) {
-        t.join();
-    }
-    workThreads.clear();
+    runJobs(buffers.size(), [&](size_t i) -> uint64_t {
+        const auto& storage = buffers[i]->storage;
+        if (auto* path = std::get_if<std::string>(&storage)) {
+            std::error_code ec;
+            const uint64_t size = std::filesystem::file_size(*path, ec);
+            return ec ? 0 : size;
+        }
+        if (auto* ptr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&storage)) {
+            if (auto* p = dynamic_cast<InMemoryStorageStandard<T>*>(ptr->get())) return p->data.size() * sizeof(RecordT<T>);
+            if (auto* p = dynamic_cast<InMemoryStorageStandard3D<T>*>(ptr->get())) return p->data.size() * sizeof(RecordT3D<T>);
+            if (auto* p = dynamic_cast<InMemoryStorageExtended<T>*>(ptr->get())) return p->dataExtended.size() * sizeof(RecordExtendedT<T>);
+            if (auto* p = dynamic_cast<InMemoryStorageExtended3D<T>*>(ptr->get())) return p->dataExtended.size() * sizeof(RecordExtendedT3D<T>);
+        }
+        return 0;
+    }, [&](size_t i, int slot) {
+        boundaryWorker(slot, buffers[i], ticket + static_cast<int32_t>(i));
+    });
 
     if (useLegacyWriter) {
         resultQueue.set_done();
@@ -258,6 +385,14 @@ void Tiles2MinibatchBase<T>::run() {
     notice("%s: writer threads done", __func__);
 
     postRun();
+    } catch (...) {
+        if (useLegacyWriter) resultQueue.set_done();
+        if (outputAnchor_) anchorQueue.set_done();
+        if (writer.joinable()) writer.join();
+        if (anchorWriter.joinable()) anchorWriter.join();
+        closeOutput();
+        throw;
+    }
 }
 
 template<typename T>
@@ -353,58 +488,47 @@ void Tiles2MinibatchBase<T>::configureOutputMode() {
 }
 
 template<typename T>
-void Tiles2MinibatchBase<T>::tileWorker(int threadId) {
+void Tiles2MinibatchBase<T>::tileWorker(int threadId, TileKey tile, int32_t ticket) {
     onWorkerStart(threadId);
-    std::pair<TileKey, int32_t> tileTicket;
-    TileKey tile;
-    int32_t ticket;
-    while (tileQueue.pop(tileTicket)) {
-        tile = tileTicket.first;
-        ticket = tileTicket.second;
-        if (nativeBinaryRegularTiles_) {
-            workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::MainTile;
-            workerOutputContext_[static_cast<size_t>(threadId)].tile = tile;
-            workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = 0;
-        }
-        TileData<T> tileData;
-        int32_t ret = parseOneTile(tileData, tile);
-        notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels",
-            __func__, threadId, ticket, tile.row, tile.col, ret);
-        if (ret <= 10) {
-            continue;
-        }
-        vec2f_t* anchorPtr = lookupTileAnchors(tile);
-        processTile(tileData, threadId, ticket, anchorPtr);
+    workerSubmitted_[static_cast<size_t>(threadId)] = 0;
+    workerAnchorSubmitted_[static_cast<size_t>(threadId)] = 0;
+    workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::MainTile;
+    workerOutputContext_[static_cast<size_t>(threadId)].tile = tile;
+    workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = 0;
+    TileData<T> tileData;
+    int32_t ret = parseOneTile(tileData, tile);
+    notice("%s: Thread %d (ticket %d) read tile (%d, %d) with %d internal pixels",
+        __func__, threadId, ticket, tile.row, tile.col, ret);
+    if (ret <= 10) {
+        finishWorkerOutput(threadId, ticket);
+        return;
     }
+    vec2f_t* anchorPtr = lookupTileAnchors(tile);
+    processTile(tileData, threadId, ticket, anchorPtr);
+    finishWorkerOutput(threadId, ticket);
 }
 
 template<typename T>
-void Tiles2MinibatchBase<T>::boundaryWorker(int threadId) {
+void Tiles2MinibatchBase<T>::boundaryWorker(int threadId, std::shared_ptr<BoundaryBuffer> bufferPtr, int32_t ticket) {
     onWorkerStart(threadId);
-    std::pair<std::shared_ptr<BoundaryBuffer>, int32_t> bufferTicket;
-    std::shared_ptr<BoundaryBuffer> bufferPtr;
-    int32_t ticket;
-    while (bufferQueue.pop(bufferTicket)) {
-        bufferPtr = bufferTicket.first;
-        ticket = bufferTicket.second;
-        if (nativeBinaryRegularTiles_) {
-            workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::Boundary;
-            workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = bufferPtr->key;
-        }
-        TileData<T> tileData;
-        int32_t ret = 0;
+    workerSubmitted_[static_cast<size_t>(threadId)] = 0;
+    workerAnchorSubmitted_[static_cast<size_t>(threadId)] = 0;
+    workerOutputContext_[static_cast<size_t>(threadId)].kind = OutputSourceKind::Boundary;
+    workerOutputContext_[static_cast<size_t>(threadId)].boundaryKey = bufferPtr->key;
+    TileData<T> tileData;
+    int32_t ret = 0;
 
-        if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
-            ret = (this->*parseBoundaryMemoryFn_)(tileData, storagePtr->get(), bufferPtr->key);
-        } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
-            ret = (this->*parseBoundaryFileFn_)(tileData, bufferPtr);
-            std::remove(filePath->c_str());
-        }
-        notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels",
-            __func__, threadId, ticket, bufferPtr->key, ret);
-        vec2f_t* anchorPtr = lookupBoundaryAnchors(bufferPtr->key);
-        processTile(tileData, threadId, ticket, anchorPtr);
+    if (auto* storagePtr = std::get_if<std::unique_ptr<IBoundaryStorage>>(&(bufferPtr->storage))) {
+        ret = (this->*parseBoundaryMemoryFn_)(tileData, storagePtr->get(), bufferPtr->key);
+    } else if (auto* filePath = std::get_if<std::string>(&(bufferPtr->storage))) {
+        ret = (this->*parseBoundaryFileFn_)(tileData, bufferPtr);
+        std::remove(filePath->c_str());
     }
+    notice("%s: Thread %d (ticket %d) read boundary buffer (%d) with %d internal pixels",
+        __func__, threadId, ticket, bufferPtr->key, ret);
+    vec2f_t* anchorPtr = lookupBoundaryAnchors(bufferPtr->key);
+    processTile(tileData, threadId, ticket, anchorPtr);
+    finishWorkerOutput(threadId, ticket);
 }
 
 template<typename T>
@@ -921,11 +1045,26 @@ void Tiles2MinibatchBase<T>::writerWorker() {
 
 template<typename T>
 void Tiles2MinibatchBase<T>::submitPixelResult(ResultBuf&& result, int threadId) {
+    workerSubmitted_[static_cast<size_t>(threadId)] = 1;
     if (!nativeBinaryRegularTiles_) {
         resultQueue.push(std::move(result));
         return;
     }
     appendNativeBinaryResult(result, threadId);
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::submitAnchorResult(ResultBuf&& result, int threadId) {
+    workerAnchorSubmitted_[static_cast<size_t>(threadId)] = 1;
+    anchorQueue.push(std::move(result));
+}
+
+template<typename T>
+void Tiles2MinibatchBase<T>::finishWorkerOutput(int threadId, int32_t ticket) {
+    if (!useTicketSystem_) return;
+    const size_t slot = static_cast<size_t>(threadId);
+    if (!nativeBinaryRegularTiles_ && !workerSubmitted_[slot]) resultQueue.push(ResultBuf(ticket));
+    if (outputAnchor_ && !workerAnchorSubmitted_[slot]) anchorQueue.push(ResultBuf(ticket));
 }
 
 template<typename T>

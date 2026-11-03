@@ -33,7 +33,8 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
     } else if (lineParser_.weighted) {
         assert(M_ == lineParser_.weights.size() && "Feature number does not match");
     }
-    lda_.set_nthreads(1); // because we parallelize by tile
+    lda_.set_nthreads(0); // tile arena limits both tile and within-tile work
+    lda_.set_deterministic_rng(true);
     K_ = lda_.get_n_topics();
     if (h <= 0 || h >= 1)
         error("%s: invalid parameter (%.2f) for anchor distance weighting", __func__, h);
@@ -42,6 +43,7 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
         N = lda_.get_N_global() * 100;
     }
     pseudobulk_ = MatrixXf::Zero(M_, K_);
+    ownedBackground_ = VectorXf::Zero(M_);
     confusion_ = RowMajorMatrixXf::Zero(K_, K_);
     VectorXf alpha = VectorXf::Constant(K_, 0.1/K_);
     slda_.init(K_, M_, N, seed, &alpha);
@@ -74,6 +76,18 @@ Tiles2SLDA<T>::Tiles2SLDA(int nThreads, double supportRadius, double paddingRadi
     }
 
     notice("Initialized Tiles2Minibatch");
+}
+
+template<typename T>
+void Tiles2SLDA<T>::setProfileEStep() {
+    if (fitBackground_ && !Base::usesFeatureSpecificMode())
+        error("--profile-e-step is unsupported for sparse background SLDA");
+    profileStream_.open(outPref + ".estep_profile.tsv");
+    if (!profileStream_) error("Cannot open E-step profile for %s", outPref.c_str());
+    profileStream_ << "phase\tsource\tticket\tobservations\tanchors\tfeatures\ttopics\titerations\tparallel_rows\ttotal_ms"
+        "\tsetup_ms\ttheta_ms\tphi_update_ms\tphi_normalize_ms\tpsi_update_ms\tpsi_normalize_ms"
+        "\tgamma_ms\tbackground_ms\tconvergence_ms\tsufficient_stats_ms\tother_ms\n";
+    profileEStep_ = true;
 }
 
 template<typename T>
@@ -163,7 +177,7 @@ void Tiles2SLDA<T>::set_background_prior(std::string& bgModelFile, double a0, do
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch) {
+int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, uint64_t stream) {
     std::vector<SparseObs> documents;
     if (Base::coordDim_ == MinibatchCoordDim::Dim3 && Base::useThin3DAnchors_) {
         Base::buildAnchorsThin3D(tileData, anchors, documents, hexGrid_, nMoves_, anchorMinCount_, supportRadius_, distNu_);
@@ -176,7 +190,7 @@ int32_t Tiles2SLDA<T>::initAnchors(TileData<T>& tileData, std::vector<AnchorPoin
         return 0;
     }
 
-    minibatch.gamma = lda_.transform(documents).template cast<float>();
+    minibatch.gamma = lda_.transform(documents, stream).template cast<float>();
     initAnchorGamma(minibatch);
     minibatch.n = documents.size();
     return anchors.size();
@@ -220,15 +234,15 @@ double Tiles2SLDA<T>::makeMinibatch(TileData<T>& tileData, std::vector<AnchorPoi
 }
 
 template<typename T>
-int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, const vec2f_t* fixedAnchors) {
+int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<AnchorPoint>& anchors, Minibatch& minibatch, uint64_t stream, const vec2f_t* fixedAnchors) {
     if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
         if (fixedAnchors && !fixedAnchors->empty()) {
             warning("%s: fixed anchors are ignored in 3D mode", __func__);
         }
-        return initAnchors(tileData, anchors, minibatch);
+        return initAnchors(tileData, anchors, minibatch, stream);
     }
     if ((fixedAnchors == nullptr) || fixedAnchors->empty()) {
-        return initAnchors(tileData, anchors, minibatch);
+        return initAnchors(tileData, anchors, minibatch, stream);
     }
     anchors.clear();
     for (const auto& pt : *fixedAnchors) {
@@ -236,7 +250,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
     }
     size_t nFixed = anchors.size();
     if (nFixed == 0) {
-        return initAnchors(tileData, anchors, minibatch);
+        return initAnchors(tileData, anchors, minibatch, stream);
     }
 
     // 1 Initialize hexagonal lattice
@@ -341,7 +355,7 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
     if (docs.empty()) return 0;
 
     anchors = std::move(finalAnchors);
-    minibatch.gamma = lda_.transform(docs).template cast<float>();
+    minibatch.gamma = lda_.transform(docs, stream).template cast<float>();
     initAnchorGamma(minibatch);
     minibatch.n = docs.size();
     minibatch.M = M_;
@@ -349,20 +363,15 @@ int32_t Tiles2SLDA<T>::initAnchorsHybrid(TileData<T>& tileData, std::vector<Anch
 }
 
 template<typename T>
-void Tiles2SLDA<T>::onWorkerStart(int threadId) {
-    uint64_t stream = static_cast<uint64_t>(threadId);
-    lda_.set_thread_rng_stream(stream);
-    slda_.set_thread_rng_stream(stream);
-}
-
-template<typename T>
 void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket, vec2f_t* anchorPtr) {
+    const uint64_t stream = static_cast<uint64_t>(static_cast<uint32_t>(ticket));
+    slda_.set_thread_rng_stream(stream);
     if (tileData.emptyInput()) {
         return;
     }
     std::vector<AnchorPoint> anchors;
     Minibatch minibatch;
-    int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, anchorPtr);
+    int32_t nAnchors = initAnchorsHybrid(tileData, anchors, minibatch, stream, anchorPtr);
 
     if (nAnchors == 0) {
         return;
@@ -403,21 +412,78 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
     }
     int32_t n_iter = 0;
     double delta = 0.0;
-    RowMajorMatrixXf smtx(M_, K_);
     float f0;
     // store background probability (per pixel per feature)
     std::vector<std::unordered_map<uint32_t, float>> phi0;
     std::vector<std::unordered_map<uint32_t, float>>* phi0_ptr = nullptr;
+    const bool parallelRows = minibatch.N >= 1024 &&
+        Base::activeJobs_.load(std::memory_order_relaxed) < Base::nThreads;
+    EStepProfile profile;
+    EStepProfile* profilePtr = profileEStep_ ? &profile : nullptr;
+    if (profilePtr) profile.begin();
     if (fitBackground_) {
-        f0 = slda_.do_e_step(minibatch, &smtx, &phi0, &n_iter, &delta);
+        f0 = slda_.do_e_step(minibatch, nullptr, &phi0, &n_iter, &delta,
+                             parallelRows, profilePtr);
         phi0_ptr = &phi0;
     } else {
-        f0 = slda_.do_e_step(minibatch, &smtx, nullptr, &n_iter, &delta);
+        f0 = slda_.do_e_step(minibatch, nullptr, nullptr, &n_iter, &delta,
+                             parallelRows, profilePtr);
     }
-    RowMajorMatrixXf local_cmtx = minibatch.phi.transpose() * minibatch.phi;
+    if (profilePtr) {
+        const double totalMs = profile.total();
+        const auto& ctx = Base::workerOutputContext_[static_cast<size_t>(threadId)];
+        std::lock_guard<std::mutex> lock(profileMutex_);
+        profileStream_ << (ctx.kind == Base::OutputSourceKind::MainTile ? "tile" : "boundary") << '\t';
+        if (ctx.kind == Base::OutputSourceKind::MainTile)
+            profileStream_ << ctx.tile.row << ',' << ctx.tile.col;
+        else
+            profileStream_ << static_cast<int32_t>(ctx.boundaryKey);
+        profileStream_ << '\t' << ticket << '\t' << minibatch.N << '\t' << minibatch.n
+            << '\t' << M_ << '\t' << K_ << '\t' << n_iter << '\t' << parallelRows
+            << '\t' << totalMs;
+        for (double ms : profile.ms) profileStream_ << '\t' << ms;
+        profileStream_ << '\n' << std::flush;
+    }
+    RowMajorMatrixXf localPseudobulk = RowMajorMatrixXf::Zero(M_, K_);
+    VectorXf localBackground = VectorXf::Zero(M_);
+    std::vector<uint8_t> internalRows(static_cast<size_t>(minibatch.N), 0);
+    for (int32_t original : tileData.idxinternal) {
+        const int32_t row = tileData.orgpts2pixel[original];
+        if (row < 0) continue; // no inferred row, so no output
+        internalRows[row] = 1;
+        uint32_t feature;
+        float count;
+        if (Base::isSingleMoleculeMode()) {
+            // The input arrays were compacted while constructing the minibatch.
+            feature = minibatch.featureIdx[row];
+            count = minibatch.featureWeight[row];
+        } else if (Base::coordDim_ == MinibatchCoordDim::Dim3) {
+            const auto& rec = useExtended_ ? tileData.extended3D().extPts3d[original].recBase
+                                           : tileData.standard3D().pts3d[original];
+            feature = rec.idx;
+            count = static_cast<float>(rec.ct);
+        } else {
+            const auto& rec = useExtended_ ? tileData.extended2D().extPts[original].recBase
+                                           : tileData.standard2D().pts[original];
+            feature = rec.idx;
+            count = static_cast<float>(rec.ct);
+        }
+        if (!Base::isSingleMoleculeMode() && lineParser_.weighted)
+            count *= static_cast<float>(lineParser_.weights[feature]);
+        float background = 0.0f;
+        if (fitBackground_) background = phi0[row].at(feature);
+        localPseudobulk.row(feature) += (count * (1.0f - background)) * minibatch.phi.row(row);
+        if (fitBackground_) localBackground(feature) += count * background;
+    }
+    RowMajorMatrixXf local_cmtx = RowMajorMatrixXf::Zero(K_, K_);
+    for (int32_t row = 0; row < minibatch.N; ++row) {
+        if (internalRows[row])
+            local_cmtx.noalias() += minibatch.phi.row(row).transpose() * minibatch.phi.row(row);
+    }
     {
         std::lock_guard<std::mutex> lock(pseudobulkMutex_);
-        pseudobulk_ += smtx;
+        pseudobulk_ += localPseudobulk;
+        ownedBackground_ += localBackground;
         confusion_ += local_cmtx;
         // if (debug_) {
         //     std::cout << "Thread " << threadId << " updated pseudobulk.\n";
@@ -443,7 +509,7 @@ void Tiles2SLDA<T>::processTile(TileData<T> &tileData, int threadId, int ticket,
         auto anchorResult = Base::formatAnchorResult(
             anchors, anchorTopVals, anchorTopIds, ticket,
             tileData.xmin, tileData.xmax, tileData.ymin, tileData.ymax);
-        anchorQueue.push(std::move(anchorResult));
+        Base::submitAnchorResult(std::move(anchorResult), threadId);
     }
 
     char buf[256];
@@ -468,7 +534,7 @@ void Tiles2SLDA<T>::writeGlobalMatrixToTsv() {
     if (!oss) error("Error opening pseudobulk output file: %s", outFile.c_str());
     oss << "Feature";
     if (fitBackground_) {oss << "\tBackground";}
-    const VectorXf& bgProb = slda_.get_background_count();
+    const VectorXf& bgProb = ownedBackground_;
     const auto factorNames = lda_.get_topic_names();
     for (int32_t i = 0; i < K_; ++i) oss << "\t" << factorNames[i];
     oss << "\n" << std::setprecision(probDigits) << std::fixed;

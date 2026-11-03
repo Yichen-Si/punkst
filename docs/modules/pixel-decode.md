@@ -53,6 +53,17 @@ Current restrictions for both `--single-feature-pixel` and `--single-molecule`:
 - does not support `--output-bg-prob-expand`, `--ext-col-ints`, `--ext-col-floats`, or `--ext-col-strs`
 - does not support extended or weighted parser modes
 
+## Parallelism and memory
+
+`pixel-decode` processes the data by tiles in parallel. `--threads` sets the
+total number of threads; by default each thread works on one tile at a time so the peak memory scales with the number of threads. There are two options to separately control the number of threads and the peak memory usage:
+- `--max-concurrent-tiles` limits the number of tiles that can be processed simultaneously. For example, `--threads 8 --max-concurrent-tiles 2` allows two active
+tiles and allocate the remaining threads to within-tile parallelization.
+- `--max-ram-gb` directly limits the peak memory usage but it is **not** a hard limit. On Linux, the
+estimate adapts to observed memory use. This is a best-effort target because tile and buffer sizes vary, a few percents of excess is expected.
+
+Both limits apply when set. For runtime overhead diagnosis, use `--profile-e-step` to profile the time spent in each inference stage.
+
 ## Required Parameters
 
 `--in-tsv` - Specifies the tiled data created by `pts2tiles`.
@@ -184,7 +195,13 @@ shortest z interval used in adaptive thin 3D. Default: `0.95`.
 
 `--ignore-outside-zrange` - Drop observations outside `[zmin, zmax]` in 3D mode.
 
-`--threads` - Number of threads to use for parallel processing. Default: 1.
+`--threads` - Maximum compute threads. Default: 1.
+
+`--max-concurrent-tiles` - Maximum active tiles or boundary jobs. Default: `--threads`.
+
+`--max-ram-gb` - Best-effort RAM target in decimal gigabytes; not a hard limit. Unset by default.
+
+`--profile-e-step` - Write per-region SLDA stage timings to `<out-pref>.estep_profile.tsv`. Available for standard pixels without background and either feature-specific mode with or without background; unavailable for NMF.
 
 `--seed` - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.
 

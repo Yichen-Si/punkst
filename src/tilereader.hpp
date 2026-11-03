@@ -239,6 +239,10 @@ public:
             tileList.push_back(pair.first);
         }
     }
+    uint64_t getTileInputBytes(const TileKey& tile) const {
+        auto it = tile_map_.find(tile);
+        return it == tile_map_.end() ? 0 : it->second.idx.ed - it->second.idx.st;
+    }
     void getBlockList(std::vector<TileInfo>& blockList) const {
         blockList = blocks_;
     }

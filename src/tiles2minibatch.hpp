@@ -23,6 +23,8 @@
 #include "utils.h"
 #include "utils_sys.hpp"
 #include "threads.hpp"
+#include <tbb/task_arena.h>
+#include <tbb/task_group.h>
 
 #include "Eigen/Dense"
 #include "Eigen/Sparse"
@@ -351,11 +353,17 @@ public:
         configureOutputMode();
         nativeBinaryRegularTiles_ = nativeRegularTiles_ && outputBinary_;
         workerOutputContext_.resize(static_cast<size_t>(std::max(1, nThreads)));
+        workerSubmitted_.resize(static_cast<size_t>(std::max(1, nThreads)), 0);
+        workerAnchorSubmitted_.resize(static_cast<size_t>(std::max(1, nThreads)), 0);
     }
 
     virtual ~Tiles2MinibatchBase() {closeOutput();}
 
     void run();
+    void setParallelLimits(int maxConcurrentTiles, double maxRamGb) {
+        maxConcurrentTiles_ = maxConcurrentTiles;
+        maxRamBytes_ = maxRamGb > 0 ? static_cast<uint64_t>(maxRamGb * 1e9) : 0;
+    }
     // Load fixed anchor points from a file and assign to tiles/boundaries
     int32_t loadAnchors(const std::string& anchorFile);
 
@@ -476,6 +484,9 @@ protected:
     using FormatPixelFn = ResultBuf (Tiles2MinibatchBase::*)(const TileData<T>& tileData, const MatrixXf& topVals, const MatrixXi& topIds, int ticket, std::vector<std::unordered_map<uint32_t, float>>* phi0);
 
     int nThreads; // Number of worker threads
+    int maxConcurrentTiles_ = 0;
+    uint64_t maxRamBytes_ = 0;
+    std::atomic<int> activeJobs_{0};
     int tileSize; // Tile size (square)
     double r;     // Processing radius (padding width)
     std::string outPref;
@@ -494,9 +505,6 @@ protected:
     size_t anchorOutputSize = 0;
     std::map<uint32_t, std::shared_ptr<BoundaryBuffer>> boundaryBuffers;
     std::mutex boundaryBuffersMapMutex; // Protects modifying boundaryBuffers
-    ThreadSafeQueue<std::pair<TileKey, int32_t> > tileQueue;
-    ThreadSafeQueue<std::pair<std::shared_ptr<BoundaryBuffer>, int32_t>> bufferQueue;
-    std::vector<std::thread> workThreads;
     ThreadSafeQueue<ResultBuf> resultQueue;
     ThreadSafeQueue<ResultBuf> anchorQueue;
     // Anchors (optionally preloaded from files)
@@ -544,16 +552,20 @@ protected:
     int32_t M_ = 0;
     std::vector<WorkerShardFiles> workerShards_;
     std::vector<WorkerOutputContext> workerOutputContext_;
+    std::vector<uint8_t> workerSubmitted_;
+    std::vector<uint8_t> workerAnchorSubmitted_;
 
     /* Worker */
 
     virtual void onWorkerStart(int threadId) { (void)threadId; }
 
-    void tileWorker(int threadId);
-    void boundaryWorker(int threadId);
+    void tileWorker(int threadId, TileKey tile, int32_t ticket);
+    void boundaryWorker(int threadId, std::shared_ptr<BoundaryBuffer> bufferPtr, int32_t ticket);
     void writerWorker();
     void anchorWriterWorker();
     void submitPixelResult(ResultBuf&& result, int threadId);
+    void submitAnchorResult(ResultBuf&& result, int threadId);
+    void finishWorkerOutput(int threadId, int32_t ticket);
 
     bool usesFeatureSpecificMode() const { return featureSpecificMode_ != FeatureSpecificMode::Off; }
     bool isSingleFeaturePixelMode() const { return featureSpecificMode_ == FeatureSpecificMode::SingleFeaturePixel; }
