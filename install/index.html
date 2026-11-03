@@ -867,6 +867,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -1022,6 +1030,118 @@
     
   
     topic-model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/screen-ref/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reference-screen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/gammapois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gamma-Poisson
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/leiden/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Leiden
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../modules/partition-classifier.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probabilistic partition classifier
   
 
     
@@ -1675,6 +1795,9 @@ Then do the following (everytime) before you build punkst
 </span><span id="__span-11-7"><a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$HOME</span><span class="s2">/.local&quot;</span>
 </span></code></pre></div>
 <h3 id="optional-features">Optional Features<a class="headerlink" href="#optional-features" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>png output</strong></li>
+</ul>
 <p>Image output is enabled by default:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-12-1"><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DENABLE_IMAGE_OUTPUT<span class="o">=</span>ON
 </span></code></pre></div>
@@ -1687,18 +1810,30 @@ Then do the following (everytime) before you build punkst
 <p>Disable image output to build without libpng:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-13-1"><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DENABLE_IMAGE_OUTPUT<span class="o">=</span>OFF
 </span></code></pre></div>
+<ul>
+<li><strong>Remote I/O</strong></li>
+</ul>
 <p>Remote random-access readers for <code>http(s)</code> and <code>s3://</code> inputs are enabled by default:</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-14-1"><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DENABLE_REMOTE_IO<span class="o">=</span>ON
 </span></code></pre></div>
 <p>Disable remote I/O to build without libcurl. Local-file input still works.</p>
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-15-1"><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>cmake<span class="w"> </span>..<span class="w"> </span>-DENABLE_REMOTE_IO<span class="o">=</span>OFF
 </span></code></pre></div>
+<ul>
+<li><strong>Faiss ANN for k-NN</strong></li>
+</ul>
+<p>Faiss ANN is only used in <code>punkst leiden</code>, which is just a convenient implementation of the Leiden algorithm for k-NN graphs constructed based on inferred factor compositions. ANN is advantageous only for very large datasets (e.g. close to <code>10^6</code> cells) and Faiss ANN has a lot more dependencies, so it is completely optional. Currently prebuilt binaries do NOT include Faiss ANN.</p>
+<p>Faiss ANN support defaults to <code>AUTO</code>. CMake enables it when CMake 3.24 or newer,
+the pinned <code>ext/faiss</code> source, C++20 compiler support, OpenMP, BLAS, and LAPACK
+are all available. (Note: the main punkst sources remain C++17)</p>
+<p>Override the default with <code>-DPUNKST_ENABLE_FAISS_ANN=ON</code> (missing dependence leads to error) or <code>-DPUNKST_ENABLE_FAISS_ANN=OFF</code>.</p>
 <h3 id="performance-and-portability">Performance And Portability<a class="headerlink" href="#performance-and-portability" title="Permanent link">&para;</a></h3>
 <p>The default build prioritizes local runtime performance:</p>
 <ul>
 <li><code>CMAKE_BUILD_TYPE=Release</code> when no build type is specified</li>
 <li><code>ENABLE_LTO=ON</code></li>
 <li><code>ENABLE_NATIVE_ARCH=ON</code></li>
+<li><code>PUNKST_ENABLE_FAISS_ANN=AUTO</code></li>
 </ul>
 <p>Useful CMake options:</p>
 <table>
@@ -1744,6 +1879,16 @@ Then do the following (everytime) before you build punkst
 <td style="text-align: left;">No remote I/O</td>
 <td style="text-align: left;"><code>cmake .. -DENABLE_REMOTE_IO=OFF</code></td>
 <td style="text-align: left;">Builds without libcurl</td>
+</tr>
+<tr>
+<td style="text-align: left;">Require Faiss ANN k-NN</td>
+<td style="text-align: left;"><code>cmake .. -DPUNKST_ENABLE_FAISS_ANN=ON</code></td>
+<td style="text-align: left;">Adds explicit HNSW and NN-descent backends, or stops configuration if their prerequisites are unavailable</td>
+</tr>
+<tr>
+<td style="text-align: left;">Disable Faiss ANN k-NN</td>
+<td style="text-align: left;"><code>cmake .. -DPUNKST_ENABLE_FAISS_ANN=OFF</code></td>
+<td style="text-align: left;">Builds without Faiss even when its prerequisites are available</td>
 </tr>
 </tbody>
 </table>

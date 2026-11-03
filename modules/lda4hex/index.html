@@ -14,7 +14,7 @@
         <link rel="prev" href="../tiles2rois/">
       
       
-        <link rel="next" href="../pixel-decode/">
+        <link rel="next" href="../screen-ref/">
       
       
         
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#lda-with-stochastic-variational-inference" class="md-skip">
+        <a href="#latent-dirichlet-allocation-lda" class="md-skip">
           Skip to content
         </a>
       
@@ -669,6 +669,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -877,6 +885,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#example-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#input-formats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -916,15 +935,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#lda4hex-topic-model" class="md-nav__link">
+  <a href="#topic-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        lda4hex / topic-model
+        topic-model
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="lda4hex / topic-model">
+    <nav class="md-nav" aria-label="topic-model">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -943,6 +962,17 @@
     <span class="md-ellipsis">
       
         Feature selection and weighting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transform-after-fitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transform after fitting
       
     </span>
   </a>
@@ -972,21 +1002,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional-background-model" class="md-nav__link">
+  <a href="#prune-topics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional background model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-related-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform-related options
+        Prune topics
       
     </span>
   </a>
@@ -1033,13 +1052,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
+  <a href="#transform-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
+        Transform options
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Transform options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#input-processing-and-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input processing and inference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-and-output-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic and output controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1063,6 +1110,118 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../screen-ref/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reference-screen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gammapois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gamma-Poisson
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../leiden/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Leiden
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../partition-classifier.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probabilistic partition classifier
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1376,6 +1535,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#example-usage" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example usage
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#input-formats" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1415,15 +1585,15 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#lda4hex-topic-model" class="md-nav__link">
+  <a href="#topic-model" class="md-nav__link">
     <span class="md-ellipsis">
       
-        lda4hex / topic-model
+        topic-model
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="lda4hex / topic-model">
+    <nav class="md-nav" aria-label="topic-model">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
@@ -1442,6 +1612,17 @@
     <span class="md-ellipsis">
       
         Feature selection and weighting
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#transform-after-fitting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Transform after fitting
       
     </span>
   </a>
@@ -1471,21 +1652,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional-background-model" class="md-nav__link">
+  <a href="#prune-topics" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional background model
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#transform-related-options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Transform-related options
+        Prune topics
       
     </span>
   </a>
@@ -1532,13 +1702,41 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#optional" class="md-nav__link">
+  <a href="#transform-options" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Optional
+        Transform options
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Transform options">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#input-processing-and-inference" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Input processing and inference
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#diagnostic-and-output-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostic and output controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -1578,12 +1776,32 @@
   
 
 
-<h1 id="lda-with-stochastic-variational-inference">LDA with stochastic variational inference<a class="headerlink" href="#lda-with-stochastic-variational-inference" title="Permanent link">&para;</a></h1>
+<h1 id="latent-dirichlet-allocation-lda">Latent Dirichlet Allocation (LDA)<a class="headerlink" href="#latent-dirichlet-allocation-lda" title="Permanent link">&para;</a></h1>
 <p>This document describes the current behavior of:</p>
 <ul>
 <li><code>punkst topic-model</code></li>
 <li><code>punkst lda-transform</code></li>
 </ul>
+<p>Dense <code>{prefix}.results.tsv</code> output can be clustered directly with
+<a href="../leiden/"><code>punkst leiden</code></a>.</p>
+<h2 id="example-usage">Example usage<a class="headerlink" href="#example-usage" title="Permanent link">&para;</a></h2>
+<p>Fit a 24-topic model from custom sparse input and transform the same units:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>punkst<span class="w"> </span>topic-model<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>--in-data<span class="w"> </span>sample.units.tsv<span class="w"> </span>--in-meta<span class="w"> </span>sample.meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">  </span>--out-prefix<span class="w"> </span>sample.lda<span class="w"> </span>--residuals<span class="w"> </span>--transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span>--n-topics<span class="w"> </span><span class="m">24</span><span class="w"> </span>--n-epochs<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div>
+<p>Apply the fitted model to another dataset:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>punkst<span class="w"> </span>lda-transform<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">  </span>--in-data<span class="w"> </span>new.units.tsv<span class="w"> </span>--in-meta<span class="w"> </span>new.meta.json<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>--in-model<span class="w"> </span>sample.lda.model.tsv<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>--out-prefix<span class="w"> </span>new.lda<span class="w"> </span>--residuals<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span>--threads<span class="w"> </span><span class="m">4</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
+</span></code></pre></div>
+<p>For 10X MEX input, replace <code>--in-data</code> and <code>--in-meta</code> with one or more
+<code>--in-dge-dir</code> values, or provide matching <code>--in-barcodes</code>, <code>--in-features</code>,
+and <code>--in-matrix</code> lists.</p>
 <h2 id="input-formats">Input formats<a class="headerlink" href="#input-formats" title="Permanent link">&para;</a></h2>
 <h3 id="custom-sparse-text-input">Custom sparse text input<a class="headerlink" href="#custom-sparse-text-input" title="Permanent link">&para;</a></h3>
 <p>This is the sparse unit-by-feature format produced by <code>tiles2hex</code>.</p>
@@ -1608,7 +1826,7 @@
 </ul>
 <p>For 10X input, the data are loaded into memory. When multiple datasets are provided, they are treated as one joint corpus and the default feature space is the intersection of all input feature lists. When <code>--features</code> is not supplied during fitting, <code>{prefix}.features.tsv</code> is written with the final feature names and total counts.</p>
 <p>If <code>--dataset-id</code> is omitted, dataset IDs default to <code>1</code>, <code>2</code>, <code>3</code>, ... in input order.</p>
-<h2 id="lda4hex-topic-model"><code>lda4hex</code> / <code>topic-model</code><a class="headerlink" href="#lda4hex-topic-model" title="Permanent link">&para;</a></h2>
+<h2 id="topic-model"><code>topic-model</code><a class="headerlink" href="#topic-model" title="Permanent link">&para;</a></h2>
 <h3 id="required">Required<a class="headerlink" href="#required" title="Permanent link">&para;</a></h3>
 <ul>
 <li>Output prefix <code>--out-prefix</code></li>
@@ -1637,6 +1855,7 @@ Negative and non-finite weights are ignored with a warning; zero weights are all
 <p><code>--default-weight</code>
 Default weight for model/prior features missing from <code>--features</code> when feature weighting is active. Default: <code>-1</code>, which drops missing model/prior features. Set this to a non-negative value, such as <code>0</code>, to keep missing model/prior features and fill their weights.</p>
 <p>Model fitting and transform use the weighted counts. Pseudobulk output remains on the original count scale.
+The topic proportions used by pseudobulk still come from the weighted transform, so weights can affect pseudobulk indirectly through those proportions.
 When <code>--prior-scale-rel</code> is used with feature weights, the prior is scaled relative to weighted feature totals, so continued fitting or transform should use the same feature weights.</p>
 <p>For 10X input, the feature-selection behavior is:</p>
 <ol>
@@ -1646,12 +1865,37 @@ When <code>--prior-scale-rel</code> is used with feature weights, the prior is s
 <li>Otherwise the 10X matrix is loaded, feature totals are computed, and filtering is applied afterward.</li>
 </ol>
 <p>With multiple 10X datasets, the starting 10X feature list in steps 1 and 3 is the intersection across all datasets.</p>
+<h3 id="transform-after-fitting">Transform after fitting<a class="headerlink" href="#transform-after-fitting" title="Permanent link">&para;</a></h3>
+<p><code>--transform</code>
+Transform the input units after fitting.</p>
+<p><code>topic-model --transform</code>
+delegates to <code>lda-transform</code>. The shared inference, filtering, weighting,
+diagnostic, top-k, and pseudobulk controls are documented once under
+<a href="#transform-options">Transform options</a>; their behavior is the same when
+invoked through <code>topic-model</code>. The delegated transform keeps every non-empty
+unit by setting <code>--min-count 1</code>.</p>
 <h3 id="lda-fitting-options">LDA fitting options<a class="headerlink" href="#lda-fitting-options" title="Permanent link">&para;</a></h3>
 <p><code>--n-topics</code>
 Number of topics.</p>
 <p><code>--threads</code>, <code>--seed</code></p>
 <p><code>--n-epochs</code>
 Number of training passes. Default: <code>1</code>.</p>
+<p><code>--count-cache</code>
+Cache for repeated custom sparse-text training passes:
+<code>off</code>, <code>on</code>, or <code>auto</code> (default). <code>auto</code> caches when at least two full count
+passes are planned. The first pass remains in memory when it fits
+<code>--count-cache-memory-budget</code>; otherwise it spills to a sequential temporary
+file without a random-access index. The 10X path already keeps remapped
+documents in memory and does not use this cache.</p>
+<p><code>--count-cache-memory-budget</code>
+Maximum memory used for retained parsed count data. Integer byte values and
+<code>K</code>, <code>M</code>, or <code>G</code> suffixes are accepted. Default: <code>1G</code>. A value of <code>0</code> forces
+sequential temporary storage whenever the count cache is active.</p>
+<p><code>--temp-dir</code>
+Parent directory for the temporary count cache and any delegated transform
+diagnostic spool. The system temporary directory is used when omitted. No
+directory is created for a resident cache; temporary files are removed when
+their operation finishes.</p>
 <p><code>--minibatch-size</code>
 Minibatch size. Default: <code>512</code>.</p>
 <p><code>--min-count-train</code>
@@ -1681,42 +1925,33 @@ Scale the prior relative to observed feature totals.</p>
 Use the prior model to transform the data without fitting. Implies <code>--transform</code>.</p>
 <p><code>--sort-topics</code>
 Sort learned topics by abundance before writing the model.</p>
-<h3 id="optional-background-model">Optional background model<a class="headerlink" href="#optional-background-model" title="Permanent link">&para;</a></h3>
-<p><code>--fit-background</code>
-Fit an additional background profile together with the LDA factors.</p>
-<p><code>--background-prior</code>
-Input prior for the background profile.</p>
-<p><code>--background-init-scale</code>
-Scale used when initializing the background from feature totals.</p>
-<p><code>--fix-background</code>
-Keep the background profile fixed during training.</p>
-<p><code>--bg-fraction-prior-a0</code>, <code>--bg-fraction-prior-b0</code>
-Beta prior parameters for the background fraction.</p>
-<p><code>--warm-start-epochs</code>
-Warm-start the topic model before enabling the background.</p>
-<h3 id="transform-related-options">Transform-related options<a class="headerlink" href="#transform-related-options" title="Permanent link">&para;</a></h3>
-<p><code>--transform</code>
-Transform the input units after fitting.</p>
-<p><code>--residuals</code>
-For the plain LDA path, also write residual-based summaries and feature residuals.</p>
-<p><code>--feature-residuals</code>
-Alias for <code>--residuals</code>.</p>
-<p><code>--topk-only &lt;int&gt;</code>
-For the plain LDA path, write only the top-k topic indices and probabilities to <code>{prefix}.results.tsv</code>.</p>
+<h3 id="prune-topics">Prune topics<a class="headerlink" href="#prune-topics" title="Permanent link">&para;</a></h3>
+<p><code>--adaptive-topics</code>
+Treat <code>--n-topics</code> as an upper bound. During the final initial-training epoch,
+reuse local inference from the most recently processed minibatch-sized window
+to estimate topic usage. Then remove topics below the mean-weight threshold,
+reset the symmetric LDA priors for the retained topic count, and refit. This
+avoids rereading and reinferring the complete training corpus solely for topic
+selection.</p>
+<p><code>--min-topic-mean</code>
+Minimum mean foreground topic weight retained by adaptive fitting. Default:
+<code>1e-5</code>. This intentionally removes only prior-only slots, not merely rare
+programs.</p>
+<p><code>--adaptive-refit-epochs</code>
+Number of epochs after pruning. Default: <code>1</code>.</p>
 <h3 id="main-outputs">Main outputs<a class="headerlink" href="#main-outputs" title="Permanent link">&para;</a></h3>
 <p><code>{prefix}.model.tsv</code>
 Feature-by-topic model matrix.</p>
+<p><code>{prefix}.state.tsv</code>
+SVB state containing the unnormalized global components,
+document/topic priors, ordered topic and feature names, and feature-weight
+metadata. This is the recommended input to <code>lda-transform</code>.</p>
 <p><code>{prefix}.features.tsv</code>
 Written for 10X fitting when <code>--features</code> is not supplied.</p>
-<p><code>{prefix}.background.tsv</code>
-Written when <code>--fit-background</code> is used.</p>
-<p>When <code>--transform</code> is used:</p>
-<ul>
-<li>plain LDA without background delegates to <code>lda-transform</code></li>
-<li>background-enabled LDA keeps the older transform path</li>
-</ul>
-<p>For the delegated plain-LDA path used by <code>lda4hex --transform</code>, the transform stage keeps all non-empty units by using <code>--min-count 1</code>.</p>
-<p>For the plain LDA path, transform outputs are:</p>
+<p><code>{prefix}.topic_usage.tsv</code>
+Pre-pruning mean foreground weights and retention decisions. Written when
+<code>--adaptive-topics</code> is used.</p>
+<p>Transform outputs are:</p>
 <p><code>{prefix}.results.tsv</code>
 Topic proportions per unit. By default this contains all topics. With <code>--topk-only k</code>, it instead contains columns <code>K1..Kk</code> and <code>P1..Pk</code>.</p>
 <p><code>{prefix}.pseudobulk.tsv</code>
@@ -1726,53 +1961,181 @@ Written when <code>--residuals</code> is enabled. Current columns are:</p>
 <ul>
 <li><code>total_count</code></li>
 <li><code>residual</code></li>
-<li><code>cosine_sim</code></li>
 <li><code>entropy</code></li>
+</ul>
+<p>With <code>--unit-diagnostics-similarity</code>, the file also contains:</p>
+<ul>
+<li><code>cosine_sim</code></li>
 <li><code>sh_lcr</code></li>
 <li><code>sh_q</code></li>
 </ul>
 <p><code>{prefix}.feature_residuals.tsv</code>
-Written when <code>--residuals</code> is enabled.</p>
-<p>The <code>entropy</code>, <code>sh_lcr</code>, and <code>sh_q</code> summaries are computed from each unit's topic proportions, treating them as a probability distribution over topics. Topic similarity is defined by cosine similarity among the row-normalized topic-word profiles.</p>
+Written when <code>--residuals</code> is enabled. See
+<a href="../feature_eval/">Per-feature diagnostics for topic models</a> for the complete
+column schema, formulas, interpretation, LDA specialization, and computational
+behavior.</p>
+<p><code>entropy</code> is computed from each unit's topic proportions, treating them as a
+probability distribution over topics. The opt-in <code>sh_lcr</code> and <code>sh_q</code>
+statistics additionally use cosine similarity among row-normalized topic-word
+profiles.</p>
 <p>For custom sparse input, carried-over metadata columns from <code>header_info</code> appear before the transform outputs. For 10X input, the leading identifier column is <code>#barcode</code>. With a single 10X dataset it keeps the original barcode/identifier form; with multiple 10X datasets it is written as <code>&lt;dataset_id&gt;:&lt;barcode&gt;</code>.</p>
 <h2 id="lda-transform"><code>lda-transform</code><a class="headerlink" href="#lda-transform" title="Permanent link">&para;</a></h2>
-<p><code>lda-transform</code> applies a fitted plain LDA model to new data.</p>
+<p><code>lda-transform</code> applies a fitted plain LDA model to new data. It also accepts
+the versioned state written by current <code>topic-model</code> fits; the state preserves
+the priors and feature weights needed for uncertainty-aware
+<a href="../classifier/">partition classification</a>.</p>
 <h3 id="required_1">Required<a class="headerlink" href="#required_1" title="Permanent link">&para;</a></h3>
-<p><code>--in-model</code>
-Input topic-word model matrix.</p>
+<p>Exactly one of:</p>
+<ul>
+<li><code>--in-state</code>: versioned plain-SVB LDA state (recommended).</li>
+<li><code>--in-model</code>: legacy topic-word model matrix.</li>
+</ul>
 <p><code>--out-prefix</code></p>
 <p>Either:</p>
 <ul>
 <li><code>--in-data</code> and <code>--in-meta</code></li>
 <li>or one or more <code>--in-dge-dir</code>, or matching repeated <code>--in-barcodes</code> + <code>--in-features</code> + <code>--in-matrix</code></li>
 </ul>
-<h3 id="optional">Optional<a class="headerlink" href="#optional" title="Permanent link">&para;</a></h3>
-<p><code>--minibatch-size</code></p>
-<p><code>--modal</code></p>
+<h3 id="transform-options">Transform options<a class="headerlink" href="#transform-options" title="Permanent link">&para;</a></h3>
+<p>These options also govern the delegated plain-LDA transform started by
+<code>topic-model --transform</code>, where applicable.</p>
+<h4 id="input-processing-and-inference">Input processing and inference<a class="headerlink" href="#input-processing-and-inference" title="Permanent link">&para;</a></h4>
+<p><code>--minibatch-size</code>
+Minibatch size. Default: <code>512</code>.</p>
+<p><code>--modal</code>
+Modality index for multi-modal custom input.</p>
 <p><code>--threads</code>, <code>--seed</code>, <code>--verbose</code>, <code>--debug</code></p>
-<p><code>--features</code>, <code>--min-count-per-feature</code></p>
+<p><code>--features</code>, <code>--min-count-per-feature</code>, <code>--include-feature-regex</code>,
+<code>--exclude-feature-regex</code>
+Define and filter the transform feature space as described under
+<a href="#feature-selection-and-weighting">Feature selection and weighting</a>.</p>
 <p><code>--min-count</code>
 Minimum total count per unit to keep. Default: <code>20</code>.</p>
-<p><code>--icol-weight</code>, <code>--default-weight</code></p>
-<p><code>--include-feature-regex</code>, <code>--exclude-feature-regex</code></p>
+<p><code>--icol-weight</code>, <code>--default-weight</code>
+Apply feature weights as described under
+<a href="#feature-selection-and-weighting">Feature selection and weighting</a>.</p>
 <p><code>--max-iter</code>, <code>--mean-change-tol</code></p>
 <p><code>--sorted-by-barcode</code>
 Use streaming mode for 10X input sorted by barcode. With multiple datasets, streaming follows dataset order first, then barcode order within each dataset.</p>
+<h4 id="diagnostic-and-output-controls">Diagnostic and output controls<a class="headerlink" href="#diagnostic-and-output-controls" title="Permanent link">&para;</a></h4>
+<p><code>--temp-dir</code>
+Parent directory for temporary diagnostic files. The system temporary
+directory is used when omitted, and scoped temporary files are removed when
+the transform finishes. A diagnostic directory is created only when
+<code>--residuals</code> requires transform-data prevalence.</p>
 <p><code>--residuals</code>
 Write <code>{prefix}.unit_stats.tsv</code> and <code>{prefix}.feature_residuals.tsv</code>.</p>
 <p><code>--feature-residuals</code>
 Alias for <code>--residuals</code>.</p>
+<p><code>--feature-diagnostics-cheap</code>
+With <code>--residuals</code>, omit the spool-dependent
+<code>adjAbsDiffRate</code> and <code>pull</code> feature columns. This option has no effect when a
+fitting command transforms the model's training data, because that path is
+already spool-free and always emits raw-residual <code>pull</code>.</p>
+<p><code>--use-training-prevalence</code>
+With <code>--residuals</code>, use fitted training prevalence, accumulate raw-residual
+Pull inline, and omit <code>adjAbsDiffRate</code>. Fitting commands set this automatically
+after fitting the transformed data; standalone and projection-only transforms
+leave it off by default.</p>
+<p><code>--unit-diagnostics-similarity</code>
+With <code>--residuals</code>, add <code>cosine_sim</code>, <code>sh_lcr</code>, and <code>sh_q</code> to
+<code>{prefix}.unit_stats.tsv</code>. These statistics require quadratic work in the
+number of topics and are disabled by default.</p>
 <p><code>--topk-only &lt;int&gt;</code>
 Write sparse top-k output to <code>{prefix}.results.tsv</code>. The value must be a positive integer.</p>
+<p><code>--pseudobulk-all-features</code>
+Include every retained input feature in <code>{prefix}.pseudobulk.tsv</code>, including features absent from the model. Counts are accumulated on the raw scale as <code>raw_count * topic_proportion</code>; extra features do not participate in transformation, residuals, unit totals, or <code>--min-count</code>.</p>
+<p><code>--classifier-model</code> and <code>--classifier-*</code>
+Write calibrated fixed-partition predictions and optionally propagate local
+LDA posterior uncertainty. See the
+<a href="../classifier/">probabilistic partition classifier</a>. A legacy
+<code>--in-model</code> requires explicit positive <code>--alpha</code> unless
+<code>--classifier-plugin-only</code> is used.</p>
+<p><code>--out-prefix-classifier</code>
+Use a separate prefix for <code>.classifications.tsv</code> and
+<code>.classification_diagnostics.tsv</code>. It defaults to <code>--out-prefix</code>.</p>
+<p><code>--classifier-only</code>, <code>--in-transform-results</code>
+Reuse a previous dense LDA <code>.results.tsv</code> as the classifier warm start while
+rereading the original counts and fitted state. The source rows must match the
+retained input units in order and use the exact dense topic block. This mode
+writes only classification output; residual, pseudobulk-all-features, and
+top-k factor-output options are not allowed.</p>
 <h3 id="outputs">Outputs<a class="headerlink" href="#outputs" title="Permanent link">&para;</a></h3>
 <p><code>{prefix}.results.tsv</code>
 Per-unit topic proportions, or top-k topic indices/probabilities when <code>--topk-only</code> is used.</p>
-<p><code>{prefix}.pseudobulk.tsv</code></p>
+<p><code>{prefix}.pseudobulk.tsv</code>
+Contains model-overlapping features by default, or all retained input features with <code>--pseudobulk-all-features</code>. Feature weights are never applied directly to pseudobulk counts.</p>
 <p><code>{prefix}.unit_stats.tsv</code>
-Written only when <code>--residuals</code> is enabled.</p>
+Written only when <code>--residuals</code> is enabled. Its default columns are
+<code>total_count</code>, <code>residual</code>, and <code>entropy</code>; <code>--unit-diagnostics-similarity</code>
+adds <code>cosine_sim</code>, <code>sh_lcr</code>, and <code>sh_q</code>.</p>
 <p><code>{prefix}.feature_residuals.tsv</code>
-Written only when <code>--residuals</code> is enabled.</p>
-<p>In <code>{prefix}.unit_stats.tsv</code>, <code>total_count</code> is the raw total count after feature remap and filtering but before feature weights are applied.</p>
+Written only when <code>--residuals</code> is enabled. It contains the support,
+abundance-shift, deviance, topic-drift, deletion, and Pull diagnostics
+defined in <a href="../feature_eval/">Per-feature diagnostics for topic models</a>. Rows
+cover model-overlapping features only, including with
+<code>--pseudobulk-all-features</code>. Most feature diagnostics use effective weighted
+counts when feature weights are active. The multinomial variance fields
+<code>F_w</code>, <code>Qa_w</code>, <code>Q0_w</code>, <code>EVES_w</code>, <code>TVES_w</code>, and <code>U_w</code> instead use raw integer
+counts and raw model-panel totals; feature weights affect them only indirectly
+through the inferred topic proportions.</p>
+<p>In <code>{prefix}.unit_stats.tsv</code>, <code>total_count</code> is the raw total count after feature
+remapping and filtering but before feature weights are applied.</p>
+<p><code>{classifier-prefix}.classifications.tsv</code>
+Written when <code>--classifier-model</code> is supplied. It contains unit metadata,
+prediction diagnostics, LRVB status, and compact or dense class probabilities.
+The classifier prefix is <code>--out-prefix-classifier</code> when supplied and otherwise
+<code>--out-prefix</code>.</p>
+<!--
+### Optional background model
+
+`--fit-background`
+Fit a shared background profile in addition to the foreground LDA factors.
+Each unit receives a separate `Background` fraction; foreground factor
+proportions remain normalized to one independently of that fraction. A warm
+start is important because an empirical corpus-average background can
+otherwise absorb the whole model before the foreground topics specialize.
+
+`--background-prior`
+Input prior for the background profile.
+
+`--background-init-scale`
+Scale used when initializing the background from feature totals.
+
+`--background-prevalence-power`
+Downweight genes detected in only a small fraction of training units when an
+empirical background is constructed. The default `0` constructs a background
+proportional only to aggregate counts. Positive powers multiply total
+expression by detection prevalence raised to the requested power, then
+preserve the original prior mass. They are experimental and can help prevent
+abundant cell-type-specific markers from becoming nuisance background.
+
+`--fix-background`
+Keep the background profile fixed during training.
+
+`--bg-fraction-prior-a0`, `--bg-fraction-prior-b0`
+Beta prior parameters for the background fraction.
+
+`--warm-start-epochs`
+Warm-start the topic model before enabling the background. Default: `0.5`.
+
+The fixed-background mode is the recommended starting point. It anchors the
+background to aggregate training-set feature frequencies while allowing its
+fraction to vary between units. The learned-background mode is experimental.
+Background states support dense and top-k transforms and foreground
+pseudobulk output. Residual diagnostics and partition-classifier propagation
+currently reject background states because those likelihoods have not yet
+been extended with the nuisance component. -->
+
+<!-- Additional output from the background model:
+
+`{prefix}.background.tsv`
+Background profile and aggregate fitted background fraction. Written when
+`--fit-background` is used.
+
+`{prefix}.topic_specificity.tsv`
+Foreground topic probabilities and per-gene KL contributions relative to the
+background profile. Written when `--fit-background` is used. -->
 
 
 
@@ -1825,13 +2188,13 @@ Written only when <code>--residuals</code> is enabled.</p>
         
         
           
-          <a href="../pixel-decode/" class="md-footer__link md-footer__link--next" aria-label="Next: pixel-decode">
+          <a href="../screen-ref/" class="md-footer__link md-footer__link--next" aria-label="Next: reference-screen">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                pixel-decode
+                reference-screen
               </div>
             </div>
             <div class="md-footer__button md-icon">

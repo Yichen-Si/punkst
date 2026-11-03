@@ -11,7 +11,7 @@
         <link rel="canonical" href="https://Yichen-Si.github.io/punkst/modules/pixel-decode/">
       
       
-        <link rel="prev" href="../lda4hex/">
+        <link rel="prev" href="../leiden/">
       
       
         <link rel="next" href="../de/">
@@ -669,6 +669,14 @@
       
         
       
+        
+      
+        
+      
+        
+      
+        
+      
     
     
     
@@ -842,6 +850,118 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../screen-ref/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    reference-screen
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gammapois/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gamma-Poisson
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../leiden/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Leiden
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../partition-classifier.md" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Probabilistic partition classifier
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -920,6 +1040,17 @@
     <span class="md-ellipsis">
       
         Inference Modes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#parallelism-and-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallelism and memory
       
     </span>
   </a>
@@ -1398,6 +1529,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#parallelism-and-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parallelism and memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#required-parameters" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1620,6 +1762,17 @@
 <li>does not support <code>--output-bg-prob-expand</code>, <code>--ext-col-ints</code>, <code>--ext-col-floats</code>, or <code>--ext-col-strs</code></li>
 <li>does not support extended or weighted parser modes</li>
 </ul>
+<h2 id="parallelism-and-memory">Parallelism and memory<a class="headerlink" href="#parallelism-and-memory" title="Permanent link">&para;</a></h2>
+<p><code>pixel-decode</code> processes the data by tiles in parallel. <code>--threads</code> sets the
+total number of threads; by default each thread works on one tile at a time so the peak memory scales with the number of threads. There are two options to separately control the number of threads and the peak memory usage:
+- <code>--max-concurrent-tiles</code> limits the number of tiles that can be processed simultaneously. For example, <code>--threads 8 --max-concurrent-tiles 2</code> allows two active
+tiles and allocate the remaining threads to within-tile parallelization.
+- <code>--max-ram-gb</code> sets a best-effort RAM target; it is <strong>not</strong> a hard limit. On Linux and macOS,
+  the scheduler samples process resident memory and increases tile estimates after an observed excess.
+  It reports the sampled peak for each phase. If RSS sampling fails, it warns and uses fixed estimates
+  for that phase. A tile whose estimate exceeds the target still runs alone, so memory use can exceed
+  the target.</p>
+<p>Both limits apply when set. For runtime overhead diagnosis, use <code>--profile-e-step</code> to profile the time spent in each inference stage.</p>
 <h2 id="required-parameters">Required Parameters<a class="headerlink" href="#required-parameters" title="Permanent link">&para;</a></h2>
 <p><code>--in-tsv</code> - Specifies the tiled data created by <code>pts2tiles</code>.</p>
 <p><code>--in-index</code> - Specifies the index file created by <code>pts2tiles</code>.</p>
@@ -1683,23 +1836,31 @@ externally loaded anchors are not currently used.</p>
 only in 3D mode. Default: 1.</p>
 <p><code>--radius</code> - Support radius used in pixel-to-anchor weighting. In 2D and thin
 3D it also controls the anchor search neighborhood. Default: <code>anchor-dist *
-1.2</code> in 2D. In thin 3D, a default is derived from the x-y anchor spacing and
-the nearest thin-3D z-level spacing.
-stencil, but it does control the weight decay scale and contributes to the
-x-y padding.</p>
+1.2</code> in 2D. Adaptive thin 3D requires an explicit radius. Fixed-z thin 3D can
+derive a default from the x-y anchor spacing and fixed z-level spacing. In
+standard 3D, it does not change the fixed BCC stencil, but it controls the
+weight decay scale and contributes to x-y padding.</p>
 <p><code>--half-life-dist</code> - Ratio <code>h</code> in <code>(0, 1)</code> such that an anchor at distance
 <code>h * radius</code> receives weight <code>0.5</code>. Default: <code>0.7</code>. The implemented weighting
 rule is <code>w(d) = clamp(1 - (d / radius)^nu, 0.05, 0.95)</code> with
 <code>nu = log(0.5) / log(h)</code>.</p>
 <p><code>--min-init-count</code> - Minimum accumulated anchor support required for an anchor to be retained during initialization. In thin 3D this support is radius-based and distance-weighted. Default: 10.</p>
-<p><code>--zmin</code>, <code>--zmax</code> - z range for 3D mode. Thin 3D requires both values.
-Standard 3D accepts them, but only uses them when
-<code>--ignore-outside-zrange</code> is set.</p>
-<p><code>--thin-3d-z-levels</code> - Explicit z coordinates for thin-3D anchor levels.</p>
+<p><code>--zmin</code>, <code>--zmax</code> - Optional z filtering range in adaptive thin 3D and
+standard 3D. Fixed-z thin 3D requires both values and uses them as its global
+anchor bounds.</p>
+<p><code>--thin-3d-z-levels</code> - Relative thin-3D anchor positions within the selected z
+range. Values must be unique fractions in <code>[0,1]</code>.</p>
 <p><code>--thin-3d-n-z-levels</code> - Number of evenly spaced thin-3D anchor levels to
-generate between <code>zmin</code> and <code>zmax</code>.</p>
+generate within the selected z range.</p>
+<p><code>--thin-3d-fixed-z</code> - Use the global <code>zmin</code>/<code>zmax</code> range instead of estimating
+the z range separately for every tile or boundary minibatch.</p>
+<p><code>--thin-3d-z-range-mass</code> - Fraction of positive raw count mass covered by the
+shortest z interval used in adaptive thin 3D. Default: <code>0.95</code>.</p>
 <p><code>--ignore-outside-zrange</code> - Drop observations outside <code>[zmin, zmax]</code> in 3D mode.</p>
-<p><code>--threads</code> - Number of threads to use for parallel processing. Default: 1.</p>
+<p><code>--threads</code> - Maximum compute threads. Default: 1.</p>
+<p><code>--max-concurrent-tiles</code> - Maximum active tiles or boundary jobs. Default: <code>--threads</code>.</p>
+<p><code>--max-ram-gb</code> - Best-effort RAM target in decimal gigabytes; not a hard limit. Unset by default.</p>
+<p><code>--profile-e-step</code> - Write per-region SLDA stage timings to <code>&lt;out-pref&gt;.estep_profile.tsv</code>. Available for standard pixels without background and either feature-specific mode with or without background; unavailable for NMF.</p>
 <p><code>--seed</code> - Random seed for reproducibility. If not set or ≤0, a random seed will be generated.</p>
 <h3 id="output-parameters">Output Parameters<a class="headerlink" href="#output-parameters" title="Permanent link">&para;</a></h3>
 <p><code>--output-binary</code> - Writes the main output as <code>&lt;prefix&gt;.bin</code> plus <code>&lt;prefix&gt;.index</code>. This cannot be combined with <code>--output-original</code>.</p>
@@ -1751,19 +1912,27 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 </span><span id="__span-2-7"><a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
 <h3 id="thin-3d">Thin 3D<a class="headerlink" href="#thin-3d" title="Permanent link">&para;</a></h3>
-<p>Thin 3D keeps anchor lattice in x-y and adds a small set of z levels across <code>[zmin, zmax]</code> to distribute these anchors. This is an experimental mode designed for thin tissue slices from imaging-based platforms where the range on the z axis is typically only 5-10μm.</p>
+<p>Thin 3D keeps the anchor lattice in x-y and distributes its anchors through a
+small local z range. It is designed for thin tissue slices whose z position can
+shift slowly across the imaging region.</p>
 <ul>
-<li><code>--zmin</code> and <code>--zmax</code> are required.</li>
 <li>One of <code>--thin-3d-z-levels</code> or <code>--thin-3d-n-z-levels</code> must be provided.</li>
 <li>If both are provided, <code>--thin-3d-z-levels</code> takes precedence and
   <code>--thin-3d-n-z-levels</code> is ignored with a warning.</li>
-<li>When <code>--thin-3d-n-z-levels</code> is used, the z levels are placed evenly between
-  <code>zmin</code> and <code>zmax</code>.</li>
+<li><code>--thin-3d-z-levels</code> contains relative fractions in <code>[0,1]</code>. When
+  <code>--thin-3d-n-z-levels</code> is used, centered fractions are generated evenly.</li>
+<li>By default, each tile or boundary minibatch finds the shortest z interval
+  containing <code>--thin-3d-z-range-mass</code> of its positive raw count mass, then maps
+  the relative levels into that interval.</li>
+<li>If one plane alone contains the requested mass, all local levels collapse to
+  that plane.</li>
+<li><code>--thin-3d-fixed-z</code> disables adaptation, requires <code>--zmin/--zmax</code>, and maps
+  the same relative levels into that global range.</li>
 <li>The z coordinate of each anchor is assigned deterministically but
   pseudorandomly from its x-y anchor key, so z levels are mixed across x-y
   without the old periodic stripe pattern.</li>
-<li><code>--radius</code> controls both thin-3D anchor initialization and the final
-  pixel-to-anchor graph.</li>
+<li>Adaptive mode requires <code>--radius</code>; it controls both thin-3D anchor
+  initialization and the final pixel-to-anchor graph.</li>
 <li>During initialization, each point contributes to every implicit thin-3D
   anchor within the 3D support radius, using the same distance-decay rule that
   is later used during iterative updates.</li>
@@ -1777,11 +1946,12 @@ generate between <code>zmin</code> and <code>zmax</code>.</p>
 </span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>--temp-dir<span class="w"> </span><span class="si">${</span><span class="nv">tmpdir</span><span class="si">}</span><span class="w"> </span>--out-pref<span class="w"> </span><span class="si">${</span><span class="nv">out_prefix</span><span class="si">}</span><span class="w"> </span>--output-binary<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>--icol-x<span class="w"> </span><span class="m">0</span><span class="w"> </span>--icol-y<span class="w"> </span><span class="m">1</span><span class="w"> </span>--icol-z<span class="w"> </span><span class="m">2</span><span class="w"> </span>--icol-feature<span class="w"> </span><span class="m">3</span><span class="w"> </span>--icol-val<span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>--thin-3D<span class="w"> </span>--hex-grid-dist<span class="w"> </span><span class="m">18</span><span class="w"> </span>--n-moves<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span><span class="w"> </span><span class="m">1</span>.5<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="m">4</span>.5<span class="w"> </span><span class="m">6</span><span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="m">9</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>--zmin<span class="w"> </span><span class="m">0</span><span class="w"> </span>--zmax<span class="w"> </span><span class="m">20</span><span class="w"> </span>--radius<span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>--thin-3d-z-levels<span class="w"> </span><span class="m">0</span>.15<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span><span class="m">0</span>.85<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>--thin-3d-z-range-mass<span class="w"> </span><span class="m">0</span>.95<span class="w"> </span>--radius<span class="w"> </span><span class="m">7</span>.5<span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>--pixel-res<span class="w"> </span><span class="m">0</span>.5<span class="w"> </span>--pixel-res-z<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 </span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>--threads<span class="w"> </span><span class="si">${</span><span class="nv">threads</span><span class="si">}</span><span class="w"> </span>--seed<span class="w"> </span><span class="m">1</span>
 </span></code></pre></div>
+<p>If you know the data has a fixed z range (perfectly flat), add <code>--thin-3d-fixed-z</code> and use <code>--zmin 0 --zmax 10</code> to specify the range.</p>
 <h2 id="process-multiple-samples">Process multiple samples<a class="headerlink" href="#process-multiple-samples" title="Permanent link">&para;</a></h2>
 <p>If you want to project the same model onto multiple datasets/samples, you can use <code>--sample-list</code> to pass a tsv file containing all samples' information. (In this case, <code>--in-tsv</code> and <code>--in-index</code> are ignored.)
 Note: all other parameters are shared across samples, so the input files should have the same structure.</p>
@@ -1845,7 +2015,7 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../lda4hex/" class="md-footer__link md-footer__link--prev" aria-label="Previous: topic-model">
+          <a href="../leiden/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Leiden">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1855,7 +2025,7 @@ sample_id, path to the transcript file created by <code>pts2tiles</code>, path t
                 Previous
               </span>
               <div class="md-ellipsis">
-                topic-model
+                Leiden
               </div>
             </div>
           </a>
