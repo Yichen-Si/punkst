@@ -408,6 +408,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
     int32_t M_model = static_cast<int32_t>(beta.rows());
     int32_t K_model = static_cast<int32_t>(beta.cols());
     notice("Read model with %d features and %d factors", M_model, K_model);
+    if (topK < 1 || topK > K_model || topK > 0xFFFF) {
+        error("--top-k must be between 1 and min(model factor count, 65535)");
+    }
 
     // Set up input parser
     lineParserUnival parser(icol_x, icol_y, icol_feature, icol_val);
@@ -504,6 +507,9 @@ int32_t cmdPixelDecode(int32_t argc, char** argv) {
 
         M_model = emPois.get_M();
         K_model = emPois.get_K();
+        if (topK > K_model) {
+            error("--top-k must not exceed the initialized NMF model factor count (%d)", K_model);
+        }
         if (!weightFile.empty()) {
             parser.readWeights(weightFile, defaultWeight, M_model, icolWeight);
         }

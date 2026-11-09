@@ -224,7 +224,24 @@ void TileOperator::loadIndex(const std::string& indexFile) {
         }
         size_t cBytes = (mode_ & 0x4) ? sizeof(int32_t) : sizeof(float);
         if (formatInfo_.recordSize != kBytes + coord_dim_ * cBytes) {
-            error("%s: Record size %u inconsistent with k=%d and %dD dimensional coordinates", __func__, formatInfo_.recordSize, k_, coord_dim_);
+            // Older pixel-decode wrote a single top-k count directly into this
+            // packed field. Recover only when the record layout confirms it.
+            const uint32_t rawK = formatInfo_.topK;
+            const size_t fixedBytes = coord_dim_ * cBytes
+                + ((mode_ & 0x40u) ? sizeof(uint32_t) : 0u);
+            if (rawK > 15 && rawK <= static_cast<uint32_t>(K_)
+                && formatInfo_.recordSize == fixedBytes
+                    + static_cast<size_t>(rawK) * (sizeof(int32_t) + sizeof(float))) {
+                k_ = static_cast<int32_t>(rawK);
+                kvec_.assign(1, rawK);
+                if (!formatInfo_.packKvec(kvec_)) {
+                    error("%s: cannot normalize legacy top-k=%u", __func__, rawK);
+                }
+                warning("%s: recovered legacy unpacked top-k=%u from record size in %s",
+                    __func__, rawK, indexFile.c_str());
+            } else {
+                error("%s: Record size %u inconsistent with k=%d and %dD dimensional coordinates", __func__, formatInfo_.recordSize, k_, coord_dim_);
+            }
         }
     }
     regular_labeled_raster_ = ((mode_ & 0x8) == 0) && (k_ > 0) && ((mode_ & 0x4) != 0 || formatInfo_.pixelResolution > 0.0f);
@@ -1722,7 +1739,24 @@ void TileOperator::parseHeaderLine() {
 
     if (indexed_tsv) {
         if (static_cast<int32_t>(icol_ks_.size()) != k_) {
-            error("%s: Header has %lu K/P pairs, but index requires %d", __func__, icol_ks_.size(), k_);
+            // Older pixel-decode wrote a single top-k count directly into
+            // the packed index field. Its TSV header retains the full count.
+            const uint32_t rawK = formatInfo_.topK;
+            if (rawK > 15 && rawK <= static_cast<uint32_t>(K_)
+                && icol_ks_.size() == rawK
+                && prefixOrder.size() == 1 && prefixOrder.front().empty()
+                && kpCols.at("").kcols.size() == rawK
+                && kpCols.at("").pcols.size() == rawK) {
+                k_ = static_cast<int32_t>(rawK);
+                kvec_.assign(1, rawK);
+                if (!formatInfo_.packKvec(kvec_)) {
+                    error("%s: cannot normalize legacy top-k=%u", __func__, rawK);
+                }
+                warning("%s: recovered legacy unpacked top-k=%u from TSV header in %s",
+                    __func__, rawK, dataFile_.c_str());
+            } else {
+                error("%s: Header has %lu K/P pairs, but index requires %d", __func__, icol_ks_.size(), k_);
+            }
         }
     } else {
         if (icol_ks_.empty()) {

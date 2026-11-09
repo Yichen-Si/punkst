@@ -56,27 +56,31 @@ struct IndexHeader {
         return totalK;
     }
     bool packKvec(const std::vector<uint32_t>& kvec) {
-        if (kvec.size() > 7) {
-            topK = 1u << 31;
-            uint32_t n = static_cast<uint32_t>(kvec.size());
-            topK |= (n & 0x7FFF) << 16;
-            uint32_t t = 0;
-            bool flag = true;
-            uint32_t k0 = kvec[0];
-            for (auto k : kvec) {
-                t += k;
-                if (k != k0) flag = false;
+        if (kvec.empty()) {
+            topK = 0;
+            return true;
+        }
+        bool compact = kvec.size() <= 7;
+        for (uint32_t k : kvec) {
+            if (k > 0xF) compact = false;
+        }
+        if (compact) {
+            topK = 0;
+            for (size_t i = 0; i < kvec.size(); ++i) {
+                topK |= kvec[i] << (i * 4);
             }
-            topK |= (t & 0xFFFF);
-            return flag && n <= 0x7FFF && t <= 0xFFFF;
+            return true;
         }
-        topK = 0;
-        bool flag = true;
-        for (size_t i = 0; i < kvec.size(); ++i) {
-            if (kvec[i] > 0xF) flag = false;
-            topK |= (kvec[i] & 0xF) << (i * 4);
+        if (kvec.size() > 0x7FFF) return false;
+        uint64_t total = 0;
+        for (uint32_t k : kvec) {
+            if (k != kvec.front()) return false;
+            total += k;
         }
-        return flag;
+        if (total > 0xFFFF) return false;
+        topK = (1u << 31) | (static_cast<uint32_t>(kvec.size()) << 16)
+             | static_cast<uint32_t>(total);
+        return true;
     }
 };
 

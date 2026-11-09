@@ -924,7 +924,9 @@ void TileOperator::reorgTiles(const std::string& outPrefix, int32_t tileSize) {
     if (idxHeader.magic != PUNKST_INDEX_MAGIC) {
         // Normalize legacy metadata when creating a new index.
         idxHeader.magic = PUNKST_INDEX_MAGIC;
-        idxHeader.topK = k_;
+        if (k_ > 0 && !idxHeader.packKvec({static_cast<uint32_t>(k_)})) {
+            error("%s: cannot encode top-k=%d in index header", __func__, k_);
+        }
         idxHeader.xmin = globalBox_.xmin;
         idxHeader.xmax = globalBox_.xmax;
         idxHeader.ymin = globalBox_.ymin;

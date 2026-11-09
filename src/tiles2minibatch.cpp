@@ -1076,7 +1076,9 @@ IndexHeader Tiles2MinibatchBase<T>::buildIndexHeader(bool fragmented) const {
         idxHeader.mode |= 0x8;
     }
     idxHeader.tileSize = tileSize;
-    idxHeader.topK = topk_;
+    if (!idxHeader.packKvec({static_cast<uint32_t>(topk_)})) {
+        error("%s: cannot encode top-k=%d in index header", __func__, topk_);
+    }
     idxHeader.pixelResolution = usesFloatFeatureCoords() ? -1.0f : pixelResolution_;
     idxHeader.pixelResolutionZ = -1.0f;
     const auto& box = tileReader.getGlobalBox();
