@@ -11,8 +11,37 @@
 #include <chrono>
 #include <map>
 #include <algorithm>
+#include <limits>
+#include <optional>
+#if defined(__linux__)
+#include <unistd.h>
+#elif defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/task_info.h>
+#endif
 
 namespace {
+
+std::optional<uint64_t> process_rss_bytes() {
+#if defined(__linux__)
+    std::ifstream statm("/proc/self/statm");
+    uint64_t pages = 0, resident = 0;
+    const long pageSize = ::sysconf(_SC_PAGESIZE);
+    if (pageSize > 0 && (statm >> pages >> resident) &&
+        resident <= std::numeric_limits<uint64_t>::max() / static_cast<uint64_t>(pageSize)) {
+        return resident * static_cast<uint64_t>(pageSize);
+    }
+#elif defined(__APPLE__)
+    task_vm_info_data_t info{};
+    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+    if (task_info(mach_task_self(), TASK_VM_INFO,
+                  reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS &&
+        count >= TASK_VM_INFO_COUNT) {
+        return info.resident_size;
+    }
+#endif
+    return std::nullopt;
+}
 
 template<typename CoordT>
 void append_record_bytes(std::vector<char>& bytes, const PixTopProbs<CoordT>& obj, size_t recordSize) {
@@ -213,28 +242,23 @@ void Tiles2MinibatchBase<T>::run() {
         uint64_t reserved = 0;
         std::exception_ptr failure;
         std::vector<bool> occupied(static_cast<size_t>(tileLimit), false);
-        uint64_t baseline = 0;
-#if defined(__linux__)
-        auto rss = []() -> uint64_t {
-            std::ifstream statm("/proc/self/statm");
-            uint64_t pages = 0, resident = 0;
-            if (statm >> pages >> resident) {
-                return resident * static_cast<uint64_t>(::sysconf(_SC_PAGESIZE));
-            }
-            return 0;
-        };
-        baseline = rss();
-#endif
+        const auto initialRss = maxRamBytes_ ? process_rss_bytes() : std::nullopt;
+        uint64_t baseline = initialRss.value_or(0);
+        std::atomic<bool> rssFailed{maxRamBytes_ && !initialRss.has_value()};
         double expansion = 12.0;
         uint64_t peakRss = baseline;
-#if defined(__linux__)
         std::atomic<bool> stopSampling{false};
         std::atomic<uint64_t> sampledPeak{baseline};
         std::thread sampler;
-        if (maxRamBytes_) {
+        if (maxRamBytes_ && !rssFailed.load()) {
             sampler = std::thread([&] {
                 while (!stopSampling.load(std::memory_order_relaxed)) {
-                    const uint64_t current = rss();
+                    const auto currentRss = process_rss_bytes();
+                    if (!currentRss) {
+                        rssFailed.store(true, std::memory_order_relaxed);
+                        break;
+                    }
+                    const uint64_t current = *currentRss;
                     uint64_t old = sampledPeak.load(std::memory_order_relaxed);
                     while (current > old && !sampledPeak.compare_exchange_weak(
                         old, current, std::memory_order_relaxed)) {}
@@ -242,7 +266,6 @@ void Tiles2MinibatchBase<T>::run() {
                 }
             });
         }
-#endif
         bool warned = false;
         try {
         for (;;) {
@@ -250,6 +273,10 @@ void Tiles2MinibatchBase<T>::run() {
             if ((next >= count || failure) && active == 0) break;
             while (!failure && next < count && active < tileLimit &&
                    (!useTicketSystem_ || next - head < static_cast<size_t>(2 * tileLimit))) {
+                if (rssFailed.load(std::memory_order_relaxed)) {
+                    baseline = 0;
+                    expansion = 12.0;
+                }
                 const uint64_t charge = maxRamBytes_ ? static_cast<uint64_t>(std::min<long double>(
                     static_cast<long double>(std::numeric_limits<uint64_t>::max()),
                     static_cast<long double>(std::max<uint64_t>(1, estimate(next))) * expansion)) : 0;
@@ -297,35 +324,40 @@ void Tiles2MinibatchBase<T>::run() {
             if (active > 0) {
                 const size_t before = completed;
                 changed.wait(lock, [&] { return completed != before; });
-#if defined(__linux__)
-                const uint64_t current = rss();
-                peakRss = std::max({peakRss, current, sampledPeak.load(std::memory_order_relaxed)});
-                if (maxRamBytes_ && active == 0) baseline = std::max(baseline, current);
-                if (maxRamBytes_ && peakRss > maxRamBytes_) {
-                    expansion = std::min(1024.0, expansion *
-                        static_cast<double>(peakRss) / static_cast<double>(maxRamBytes_));
+                if (maxRamBytes_ && !rssFailed.load(std::memory_order_relaxed)) {
+                    const auto currentRss = process_rss_bytes();
+                    if (currentRss) {
+                        peakRss = std::max({peakRss, *currentRss, sampledPeak.load(std::memory_order_relaxed)});
+                        if (active == 0) baseline = std::max(baseline, *currentRss);
+                        if (peakRss > maxRamBytes_) {
+                            expansion = std::min(1024.0, expansion *
+                                static_cast<double>(peakRss) / static_cast<double>(maxRamBytes_));
+                        }
+                    } else {
+                        rssFailed.store(true, std::memory_order_relaxed);
+                    }
                 }
-#endif
             }
         }
         arena.execute([&] { group.wait(); });
         } catch (...) {
             arena.execute([&] { group.wait(); });
-#if defined(__linux__)
             stopSampling.store(true, std::memory_order_relaxed);
             if (sampler.joinable()) sampler.join();
-#endif
             throw;
         }
-#if defined(__linux__)
         stopSampling.store(true, std::memory_order_relaxed);
         if (sampler.joinable()) sampler.join();
         peakRss = std::max(peakRss, sampledPeak.load(std::memory_order_relaxed));
-#endif
         if (maxRamBytes_) {
-            notice("RAM target %.2f GB; sampled phase peak RSS %.2f GB",
-                   maxRamBytes_ / 1e9, peakRss / 1e9);
-            if (peakRss > maxRamBytes_) warning("Observed RSS exceeded the best-effort RAM target");
+            if (rssFailed.load(std::memory_order_relaxed)) {
+                warning("Process RSS query failed; using fixed tile estimates for this phase");
+                notice("RAM target %.2f GB; sampled phase peak RSS unavailable", maxRamBytes_ / 1e9);
+            } else {
+                notice("RAM target %.2f GB; sampled phase peak RSS %.2f GB",
+                       maxRamBytes_ / 1e9, peakRss / 1e9);
+                if (peakRss > maxRamBytes_) warning("Observed RSS exceeded the best-effort RAM target");
+            }
         }
         if (failure) std::rethrow_exception(failure);
     };

@@ -56,7 +56,7 @@ nav:
     - reference-screen: modules/screen-ref.md
     - Gamma-Poisson: modules/gammapois.md
     - Leiden: modules/leiden.md
-    - Probabilistic partition classifier: modules/partition-classifier.md
+    - Classifier: modules/classifier.md
     - pixel-decode: modules/pixel-decode.md
     - DE tests: modules/de.md
     - visualize: modules/visualization.md

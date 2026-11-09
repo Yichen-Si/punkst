@@ -14,7 +14,7 @@ hierarchical model.
 ## Interactive visualization
 
 The repository includes
-[`ext/py/feature_residuals_viz.py`](../../ext/py/feature_residuals_viz.py) for
+`ext/py/feature_residuals_viz.py` for
 exploring a `*.feature_residuals.tsv` file as linked, configurable scatter
 plots with marginal histograms, global filters, percentile-colored hover
 details, and box/lasso selection:
